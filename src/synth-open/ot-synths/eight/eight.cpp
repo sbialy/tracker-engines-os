@@ -166,7 +166,7 @@ struct Link {
 constexpr uint8_t kNever = 255;
 
 // voicePass needs two Links (772 B each) and up to three buses (512 B each) of scratch. On the stack they made voicePass the deepest
-// frame of the audio interrupt of any engine (3,728 B, the ISR chain 5,848 B against 8,424 B of stack room, ref/stack-margin-1.2.0.md).
+// frame of the audio interrupt of any engine (3,728 B, the ISR chain 5,848 B against 8,424 B of stack room).
 // The buses are packed into three slots (an oscillator has one bus, three oscillators) instead of four, the Links move to host
 // work memory when built as a plugin (EIGHT_WORK_POOL, plug/synth/eight_plug.cpp: setWork before any audio call, SDRAM on the
 // device, zeroed, 8 aligned). Only a pass that follows or feeds a sync or ring reads a Link (a byte a frame), so SDRAM costs those passes only.

@@ -6,7 +6,7 @@
   "autof": {
    "engines": "-O2 -ffp-contract=off",
    "o3": "-O3 -ffp-contract=off",
-   "note": "1.2.0 release: -ffp-contract=off on every engine (AUTO-F)"
+   "note": "1.2.0 release: -ffp-contract=off on every engine"
   },
   "fused": {
    "engines": "-O2",

@@ -296,8 +296,8 @@ TT_BLOCK void mixFull(const float* t, float* L, float* R, const Mix& m, float w0
 // ---- the six-square bank (hats, cymbal) ------------------------------------------------
 
 // Engine::render's bank block (kBlock floats, 512 B) is scratch, written by bankBlock and read by the hat and the cymbal in the same
-// call. On the stack it was part of the 2,856 B frame that made T-Type the second deepest synth in the audio interrupt (ref/
-// stack-margin-1.2.0.md). With TTYPE_WORK_POOL (the card plugin, plug/synth/ttype_plug.cpp) it is host work memory given once through
+// call. On the stack it was part of the 2,856 B frame that made T-Type the second deepest synth in the audio interrupt.
+// With TTYPE_WORK_POOL (the card plugin, plug/synth/ttype_plug.cpp) it is host work memory given once through
 // setWork before any audio call (SDRAM on the device, zeroed): only a ringing hat or cymbal touches it. The output does not change.
 #ifdef TTYPE_WORK_POOL
 float* gBankAt;
