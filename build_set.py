@@ -251,9 +251,24 @@ def build(a):
         with open(os.path.join(out, "SET.json"), "w") as f:
             json.dump(man, f, indent=1)
             f.write("\n")
+    ship_notices(out, engines, t)
     write_sums(out)
     print("%s: %d engines, set %s, flavour %s%s" % (out, len(recs), t["set_version"], flav, "" if not fail else ", FAILED"))
     return 1 if fail else 0
+
+
+def ship_notices(out, engines, t):
+    """NOTICE.md and the licence texts of the engines in the set next to the .plg files, so a release asset or a zip carries them."""
+    lfs = sorted({lf for e in engines for lf in e["licence_files"]} | {"licenses/LICENSE-tracker-ff-MIT.txt", "licenses/LICENSE-PolyendTracker-CE.txt"})
+    for lf in lfs:
+        shutil.copy(os.path.join(HERE, lf), os.path.join(out, os.path.basename(lf)))
+    with open(os.path.join(out, "NOTICE.md"), "w") as f:
+        f.write("# Notices for the plugins in this directory\n\nBuilt from poly-engines-os. Licence texts: the LICENSE-*.txt files here. "
+                "The plugin runtime and wrappers are tracker-ff, MIT (LICENSE-tracker-ff-MIT.txt). The open PolySynth header config.h is Polyend Tracker Community Edition (LICENSE-PolyendTracker-CE.txt).\n\n")
+        for e in engines:
+            mod = re.search(r"ot-synths/(\w+)/", e["dsp"])
+            f.write("## %s (%s.plg, %s.plgi)\n\n%s\n\n" % (e["name"], e["id"], e["id"],
+                    t["notices"][e["notice"]].replace("{module}", mod.group(1) if mod else e["id"])))
 
 
 def logo_test(a):

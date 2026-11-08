@@ -25,7 +25,7 @@ the engine numbers it keeps in `engines/engines.json`.
 | `sdk/files/` | the plugin SDK, a pinned copy of tracker-ff files (headers, `build_plug.py`, `plug_rt.c`, `plug.ld`, emulators, logo tools, `plug_wasm.h`, `plug_rt_wasm.c`). `sdk/SOURCE` names the tracker-ff commit |
 | `sdk/headers.txt`, `sources.txt`, `tools.txt`, `VERSION` | what a build may see (the engine compiles in a scratch tree that holds only these files) |
 | `engines.json` | the table: numbers (stored, patch and type id, they must match tracker-ff), flags per flavour, version, logo, licence |
-| `build_set.py`, `Makefile` | the `.plg` set build and its checks |
+| `build_set.py`, `Makefile` | the `.plg` set build and its checks, the set also gets NOTICE.md and the licence texts |
 | `wasm/` | the `.wasm` twins and their manifests (`build_modules.py`, emcc pinned in `wasm.json`) |
 | `tools/sdk_sync.py` | compares or refreshes `sdk/files/` against a tracker-ff checkout |
 | `licenses/`, `LICENSE`, `NOTICE.md` | the licence texts and notices that ship with the files |
