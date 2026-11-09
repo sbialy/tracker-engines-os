@@ -1,6 +1,6 @@
 # Notices
 
-poly-engines-os holds the public synth engine plugins of tracker-ff. Every `.plg`, `.plgi`, `.wasm` and manifest built here ships with
+tracker-engines-os holds the public synth engine plugins of tracker-ff. Every `.plg`, `.plgi`, `.wasm` and manifest built here ships with
 this file and the licence texts in `licenses/` (the build copies the ones a module names next to it).
 
 ## 1. opentracker-synths (the ten module engines)
@@ -15,7 +15,7 @@ this file and the licence texts in `licenses/` (the build copies the ones a modu
 * **License**: MIT, Copyright (c) 2026 Marcin Spoczynski, text in `licenses/LICENSE-OpenTracker-synths-MIT.txt`. The repository
   states it contains no Polyend code.
 * **Note**: D-Type's OpenTracker engine id (0x82) is the id of tracker-ff's PHZ engine, so D-Type is keyed 0xA2 in the picker and in
-  `.patch` files, the same as the poly-editor stores it (the engine code itself is unchanged).
+  `.patch` files, the same as the browser editor stores it (the engine code itself is unchanged).
 
 ## 2. OpenTracker 3.x headers (vendored with the SDK)
 

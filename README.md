@@ -1,18 +1,18 @@
-# poly-engines-os
+# tracker-engines-os
 
 The public synth engine plugins of tracker-ff (the custom firmware for the Polyend Tracker): the ten OpenTracker 3.x module engines
 JU6, FM4, B-Type, D-Type, CS-Type, A-Type, T-Type, 8-Type, Hand-Type and Arc-Type, each built into a device file (`<id>.plg` plus the
-card logo `<id>.plgi`) and a browser file for the poly-editor (`<id>.wasm` plus the manifest `<id>.json`).
+card logo `<id>.plgi`) and a browser file for the browser editor (`<id>.wasm` plus the manifest `<id>.json`).
 
 tracker-ff 1.2.0 is split into five repositories:
 
 | Repository | Holds |
 |---|---|
 | tracker-ff | the firmware: plugin host, plugin SDK, the built-in engines ACD FAT VAP WTFM PERC CHIP, `.ptfx` effects |
-| poly-engines-os (this one) | the public synth engine plugins (open source) |
-| poly-engines | the private synth engine plugins (PHZ, PLK, FORM, FLUX, freeware binaries only) |
-| poly-effects-os | the public master insert plugins Dirt, Tape, Lo-Fi, BBD, Phaser (open source) |
-| poly-effects | the private master insert plugins Console, Tube (freeware binaries only) |
+| tracker-engines-os (this one) | the public synth engine plugins (open source) |
+| tracker-engines | the private synth engine plugins (PHZ, PLK, freeware binaries only) |
+| tracker-effects-os | the public master insert plugins Dirt, Tape, Lo-Fi, BBD, Phaser (open source) |
+| tracker-effects | the private master insert plugins Console, Tube (freeware binaries only) |
 
 The firmware pins a release of every module repository in its `engines/external.lock.json` and checks the published files against
 the engine numbers it keeps in `engines/engines.json`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standalone build of the public synth engine .plg set of poly-engines-os. Needs no firmware build and writes nothing into the source tree.
+"""Standalone build of the public synth engine .plg set of tracker-engines-os. Needs no firmware build and writes nothing into the source tree.
 
     TOOLCHAIN=.../arm-none-eabi- python3 build_set.py build  --out DIR [--flavour autof|fused] [--py PYTHON] [--only ju6,fm4]
     python3 build_set.py verify DIR [--host-abi plug_abi.h]
@@ -263,7 +263,7 @@ def ship_notices(out, engines, t):
     for lf in lfs:
         shutil.copy(os.path.join(HERE, lf), os.path.join(out, os.path.basename(lf)))
     with open(os.path.join(out, "NOTICE.md"), "w") as f:
-        f.write("# Notices for the plugins in this directory\n\nBuilt from poly-engines-os. Licence texts: the LICENSE-*.txt files here. "
+        f.write("# Notices for the plugins in this directory\n\nBuilt from tracker-engines-os. Licence texts: the LICENSE-*.txt files here. "
                 "The plugin runtime and wrappers are tracker-ff, MIT (LICENSE-tracker-ff-MIT.txt). The open PolySynth header config.h is Polyend Tracker Community Edition (LICENSE-PolyendTracker-CE.txt).\n\n")
         for e in engines:
             mod = re.search(r"ot-synths/(\w+)/", e["dsp"])

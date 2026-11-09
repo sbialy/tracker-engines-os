@@ -1,4 +1,4 @@
-# poly-engines-os: the public synth engine plugins of tracker-ff (OpenTracker 3.x module engine ports). Works with Apple make 3.81.
+# tracker-engines-os: the public synth engine plugins of tracker-ff (OpenTracker 3.x module engine ports). Works with Apple make 3.81.
 #
 #   make TOOLCHAIN=/path/to/arm-none-eabi- [PY=python-with-unicorn]   the release set (FLAVOUR=autof) into build/engines-autof
 #   make TOOLCHAIN=... FLAVOUR=fused OUT=/tmp/set                      the fused-maths flavour

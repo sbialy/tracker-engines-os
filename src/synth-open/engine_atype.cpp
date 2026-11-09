@@ -1,7 +1,7 @@
 // A-Type parameter metadata for the open PolySynth shim on MK66. A-Type is an engine from OpenTracker 3.x (module opentracker-synths/modules/atype,
 // MIT, synth-open/ot-synths/atype). The ranges, defaults, labels, value formats, enum names and the section split follow that module's
 // descriptor (modules/atype/src/atype_desc.cpp, MIT, Copyright (c) 2026 Marcin Spoczynski, see licenses/LICENSE-OpenTracker-synths-MIT.txt).
-// Edit curves and the default macros are this shim's choice (the same rules as poly-editor host/engine_ot3.cpp).
+// Edit curves and the default macros are this shim's choice (the same rules as the browser editor engine host).
 //
 // OpenTracker engine id 0x84, see engine_list.h.
 #include "open_engine.h"

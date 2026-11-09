@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The browser twin of the engine plugins of poly-engines-os: one .wasm module and one manifest per engine (plug_wasm.h of the SDK).
+"""The browser twin of the engine plugins of tracker-engines-os: one .wasm module and one manifest per engine (plug_wasm.h of the SDK).
 
     python3 wasm/build_modules.py --out DIR [--only ju6,fm4] [--engines-plg DIR] [--emsdk DIR] [--wasm-abi-major N]
 
 The table is engines.json. Engines are built in a scratch copy of the listed files (src/ and the vendored SDK in sdk/files/, like
-build_set.py), with the EDITOR HOST's compile flags (wasm.json "engine_cxxflags" must equal `common` of poly-editor
+build_set.py), with the EDITOR HOST's compile flags (wasm.json "engine_cxxflags" must equal `common` of the browser editor
 scripts/build-wasm.ts, or a module is not bit identical to the linked-in engine). Every module is checked (only the five module
 imports, plug_entry and plug_wasm_abi exported, no name section, no DWARF), and the descriptor is read from the plugin's own sources
 (native arm64 build), so no number is typed twice.
@@ -29,7 +29,7 @@ import build_set  # noqa: E402  (stage, table, abi_of)
 import wasm_common as wc  # noqa: E402
 
 SO = os.path.join(ROOT, "sdk", "files", "synth-open")   # the vendored SDK headers (plug_abi.h, plug_wasm.h)
-SOURCE_REPO = "poly-engines-os"
+SOURCE_REPO = "tracker-engines-os"
 FIELDS = ("max_voices", "volume_param", "work_bytes", "slot_fx", "params", "sections", "macros")
 
 
