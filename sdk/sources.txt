@@ -2,6 +2,7 @@
 synth-open/engine_arc.cpp
 synth-open/engine_atype.cpp
 synth-open/engine_btype.cpp
+synth-open/engine_chip.cpp
 synth-open/engine_cstype.cpp
 synth-open/engine_dtype.cpp
 synth-open/engine_eight.cpp
@@ -32,6 +33,8 @@ synth-open/ot-synths/ttype/ttype.h
 synth-open/plug/synth/arc_plug.cpp
 synth-open/plug/synth/atype_plug.cpp
 synth-open/plug/synth/btype_plug.cpp
+synth-open/plug/synth/chip_libc.cpp
+synth-open/plug/synth/chip_plug.cpp
 synth-open/plug/synth/cstype_plug.cpp
 synth-open/plug/synth/dtype_plug.cpp
 synth-open/plug/synth/eight_plug.cpp

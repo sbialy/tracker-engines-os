@@ -1,14 +1,15 @@
 # tracker-engines-os
 
-The public synth engine plugins of tracker-ff (the custom firmware for the Polyend Tracker): the ten OpenTracker 3.x module engines
+The public synth engine plugins of tracker-ff (the custom firmware for the Polyend Tracker): CHIP (Polyend's open Chiptune voice) and the ten OpenTracker 3.x module engines
 JU6, FM4, B-Type, D-Type, CS-Type, A-Type, T-Type, 8-Type, Hand-Type and Arc-Type, each built into a device file (`<id>.plg` plus the
-card logo `<id>.plgi`) and a browser file for the browser editor (`<id>.wasm` plus the manifest `<id>.json`).
+card logo `<id>.plgi`) and, for the ten, a browser file for the browser editor (`<id>.wasm` plus the manifest `<id>.json`). CHIP has no
+browser twin: its voice needs the PolySynth SDK headers, which the wasm build does not carry (`"wasm": false` in `engines.json`).
 
 tracker-ff 1.2.0 is split into five repositories:
 
 | Repository | Holds |
 |---|---|
-| tracker-ff | the firmware: plugin host, plugin SDK, the built-in engines ACD FAT VAP WTFM PERC CHIP, `.ptfx` effects |
+| tracker-ff | the firmware: plugin host, plugin SDK, the built-in engines ACD FAT VAP WTFM PERC, `.ptfx` effects |
 | tracker-engines-os (this one) | the public synth engine plugins (open source) |
 | tracker-engines | the private synth engine plugins (PHZ, PLK, freeware binaries only) |
 | tracker-effects-os | the public master insert plugins Dirt, Tape, Lo-Fi, BBD, Phaser (open source) |
@@ -37,7 +38,7 @@ Needs the Arm GNU toolchain 12.3.rel1 (the release bytes were made with it), Pyt
 
 ```bash
 export TOOLCHAIN=/path/to/arm-gnu-toolchain-12.3.rel1/bin/arm-none-eabi-
-make PY=/path/to/python-with-unicorn     # build/engines-autof: 10 .plg + 10 .plgi, SET.json, SHA256SUMS, previews/
+make PY=/path/to/python-with-unicorn     # build/engines-autof: 11 .plg + 11 .plgi, SET.json, SHA256SUMS, previews/
 make verify
 make wasm                                # build/wasm: 10 .wasm + .json, NOTICE.md, licences, MODULES.json, SHA256SUMS
 make package                             # build/tracker-ff-engines-1.0.0-autof.zip, unzip at the card root

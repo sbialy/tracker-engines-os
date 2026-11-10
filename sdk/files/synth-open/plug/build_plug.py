@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a Tracker FF runtime plugin (.plg, ABI 1).
+"""Build a Tracker FF runtime plugin (.plg, ABI 1, spike).
 
     build_plug.py --id ff.dirt --kind master --out dirt.plg src1.cpp src2.cpp ... [-I dir] [--opt "-O2 -ffp-contract=off"]
 
@@ -11,7 +11,7 @@ Compile for the Cortex-M4F, link at address 0 with plug.ld and --emit-relocs, th
 --logo x.plgi appends a logo record (synth-open/plug_logo.h, made by tools/make_plgi.py) after the rebase table and puts its
 file offset in plug_manifest.reserved[0]. The record has its own CRC, the file CRC does not cover it.
 Per source flags (--src-opt NAME=FLAGS): a port of firmware DSP is only bit identical when its objects are built with the
-firmware object's own flags (a fused vfma would otherwise differ from the firmware build).
+firmware object's own flags (the vfma gotcha, design section 11, phase 1b).
 """
 import argparse
 import os
@@ -129,6 +129,10 @@ def main():
     ap.add_argument("--synth", help="STORED,PATCH_ENGINE,TYPE_ID of a synth engine (decimal or 0x hex) into the manifest, so a "
                     "host lists the engine before it is installed (plug_abi.h PLUG_SYNTH_MANIFEST)")
     ap.add_argument("--logo", help="a .plgi logo record to append as a trailer (synth engines, plug_logo.h)")
+    ap.add_argument("--zero-ctors", dest="zero_ctors", action="append", default=[], metavar="NAME",
+                    help="the source with basename NAME has a static initializer that only stores zero into zero-initialised .bss "
+                    "(CHIP's SDK voice base: a static_vector's size, the plugin's bss is zeroed at attach anyway): drop its .init_array. "
+                    "The caller vouches for it, the render compare proves it")
     ap.add_argument("--strip-ctors", dest="strip_ctors", action="store_true",
                     help="test references: drop .init_array from prebuilt objects (firmware objects of a render compare)")
     a = ap.parse_args()
@@ -163,6 +167,9 @@ def main():
                 cmd += ["-DPLUG_RT_LIBM11"]   # the ABI 1.1 libm forwards (exp2f and log2f from the host)
             run(cmd + ["-c", src, "-o", obj])
             hdrs = run([tc + "objdump", "-h", obj])
+            if os.path.basename(src) in a.zero_ctors and ".init_array" in hdrs:
+                run([tc + "objcopy", "--remove-section=.init_array", "--remove-section=.rel.init_array", obj])
+                hdrs = run([tc + "objdump", "-h", obj])
             if ".init_array" in hdrs or ".ctors" in hdrs:
                 sys.exit("%s has static constructors: not allowed in a plugin (use init())" % src)
             objs.append(obj)

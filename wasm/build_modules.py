@@ -148,7 +148,7 @@ def main():
     out = os.path.abspath(a.out)
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
-    engines = [e for e in t["engines"] if not a.only or e["id"] in a.only.split(",")]
+    engines = [e for e in t["engines"] if (not a.only or e["id"] in a.only.split(",")) and e.get("wasm", True)]   # CHIP has no browser twin
     recs, notices, licences = [], [], set()
     with tempfile.TemporaryDirectory(prefix="modwasm") as tmp:
         sd = os.path.join(tmp, "stage")

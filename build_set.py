@@ -110,7 +110,7 @@ def repo_file(root, lst, p):
 def stage(root, dest):
     """The files of the three lists, at their tracker-ff repository paths."""
     n = 0
-    for lst in ("headers.txt", "sources.txt", "tools.txt"):
+    for lst in ("headers.txt", "sources.txt", "tools.txt", "polysynth.txt"):
         for p in read_list(os.path.join(HERE, "sdk", lst)):
             src = repo_file(root, lst, p)
             if not os.path.exists(src):
@@ -138,13 +138,17 @@ def build_one(e, t, fl, tc, stage_dir, out, tmp, env, extra=()):
     so = os.path.join(stage_dir, "synth-open")
     fwf, name = t["fwflags"], e["name"]
     dspopt = (engine_opt(e, fl) + " " + e["extra"]).strip()
+    # def_has_dsp: the definition source also runs per block code (CHIP's engine mixes its voices), so it gets the DSP flags too
+    defs = e.get("defs", "")   # defines of both sources (CHIP: -DFEATURE_SYNTH -DFEATURE_SYNTH_OPEN, as the firmware builds the voice)
     elf = os.path.join(tmp, e["id"] + ".elf")
     cmd = [sys.executable, os.path.join(so, "plug", "build_plug.py"), "--id", "org.opentracker.synth." + e["id"], "--kind", "synth",
            "--version", e["version"], "--opt", t["wrapper_opt"], "--synth", "%d,0x%X,0x%X" % (e["stored"], e["patch"], e["type"]),
-           "--src-opt", "%s=%s %s -DSYNTH_ENGINE_%s" % (os.path.basename(e["dsp"]), fwf, dspopt, name),
-           "--src-opt", "%s=%s -DSYNTH_ENGINE_%s" % (e["def"], fwf, name), "--keep", elf,
-           "--out", os.path.join(out, e["id"] + ".plg"), "-I", ".", "-I", "ot", "-I", "../synth/include"] + list(extra) + [
-           e["wrapper"], e["def"], e["dsp"]]
+           "--src-opt", "%s=%s %s %s -DSYNTH_ENGINE_%s" % (os.path.basename(e["dsp"]), fwf, dspopt, defs, name),
+           "--src-opt", "%s=%s %s %s -DSYNTH_ENGINE_%s" % (e["def"], fwf, dspopt if e.get("def_has_dsp") else "", defs, name), "--keep", elf,
+           "--licence", e.get("plg_licence", "MIT")] + [x for z in e.get("zero_ctors", []) for x in ("--zero-ctors", z)] + [
+           "--out", os.path.join(out, e["id"] + ".plg"), "-I", ".", "-I", "ot", "-I", "../synth/include"] + [
+               x for i in e.get("inc", []) for x in ("-I", i)] + list(extra) + [
+           e["wrapper"], e["def"], e["dsp"]] + e.get("support", [])
     r = subprocess.run(cmd, cwd=so, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode:
         sys.exit("FAILED %s\n%s%s" % (e["id"], r.stdout, r.stderr))
@@ -244,7 +248,8 @@ def build(a):
             "flags": {"engines": fl["engines"], "o3": fl["o3"], "firmware_flags": t["fwflags"], "wrapper": t["wrapper_opt"]},
             "compiler": gcc,
             "sdk": {"version": ver["sdk_version"], "abi": ver["abi"], "host_level": int(ver["host_level"]),
-                    "headers_sha256": digest(sd, ("headers.txt", "tools.txt")), "sources_sha256": digest(sd, ("sources.txt",))},
+                    "headers_sha256": digest(sd, ("headers.txt", "tools.txt")), "sources_sha256": digest(sd, ("sources.txt",)),
+                    "polysynth_sha256": digest(sd, ("polysynth.txt",))},
             "requires": "firmware plug host with PLUG_ABI_MAJOR %d and PLUG_HOST_LEVEL >= %d" % (maj, 1),
             "render_checks": "done" if emu_ok else "skipped (the Python has no unicorn or --no-emu)",
             "engines": recs}

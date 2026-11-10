@@ -39,3 +39,16 @@ this file and the licence texts in `licenses/` (the build copies the ones a modu
   tracker-ff's shim headers (section 3).
 * **License**: the Polyend Tracker Community Edition License (MIT with a Wholesale Commercial Clone Restriction), Copyright (c) 2020-2026 Polyend Sp. z o.o. and contributors, text in
   `licenses/LICENSE-PolyendTracker-CE.txt`. No closed Polyend code (`libPolySynth.a`, `libPolyDSP.a`) is used.
+
+## 5. Polyend Chiptune voice (CHIP)
+
+* **Location**: `sdk/files/core/synth/engines/ChiptuneSynthVoice.{cpp,h}` (Polyend's open Chiptune voice, vendored unchanged from tracker-ff
+  `core/synth/engines/` apart from the `FEATURE_SYNTH_OPEN` hooks tracker-ff added), the PolySynth headers it includes (`sdk/files/synth/include/PolySynth/`,
+  `core/config/config.h`, `util/include/PolyUtil/misc.h`) and the third party headers those pull in (`sdk/files/util/3rdparty/`: `fmt`, `boost`
+  `container` and its dependencies, `tiny`, `constexpr-string`, `enum_util.h`), all listed in `sdk/polysynth.txt`. `src/synth-open/engine_chip.cpp`
+  hosts the voice behind the shim's engine interface (parameter table, sections and macros follow the voice's `createMetadata`, voice objects
+  in the plugin's bss), `src/synth-open/plug/synth/chip_libc.cpp` is the five C library functions a plugin lacks (tracker-ff, MIT).
+* **License**: the Polyend Tracker Community Edition License (MIT with a Wholesale Commercial Clone Restriction) for the voice and the PolySynth
+  headers, text in `licenses/LICENSE-PolyendTracker-CE.txt`. fmt is MIT (Copyright (c) 2012 - present, Victor Zverovich), constexpr-string MIT
+  (Copyright (c) 2019 Marek Bogusovsky), tiny optional and the boost headers the Boost Software License 1.0 (the headers carry their notices).
+  These are headers only: the plugin contains the code of the few templates it instantiates.

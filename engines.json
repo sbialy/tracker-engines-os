@@ -226,9 +226,46 @@
     "licenses/LICENSE-OpenTracker-Apache-2.0.txt"
    ],
    "notice": "ot-synths"
+  },
+  {
+   "id": "chip",
+   "name": "CHIP",
+   "wrapper": "plug/synth/chip_plug.cpp",
+   "def": "engine_chip.cpp",
+   "dsp": "../core/synth/engines/ChiptuneSynthVoice.cpp",
+   "opt": "engines",
+   "extra": "",
+   "inc": [
+    "../core/config",
+    "../core/synth",
+    "../util/include",
+    "../util/3rdparty"
+   ],
+   "stored": 6,
+   "patch": 8,
+   "type": 8,
+   "version": "1.0.0",
+   "logo": "CHIP",
+   "visibility": "public",
+   "licence": "Polyend CE",
+   "licence_files": [
+    "licenses/LICENSE-PolyendTracker-CE.txt"
+   ],
+   "notice": "polyend-chip",
+   "wasm": false,
+   "defs": "-DFEATURE_SYNTH -DFEATURE_SYNTH_OPEN",
+   "plg_licence": "Polyend CE",
+   "zero_ctors": [
+    "ChiptuneSynthVoice.cpp"
+   ],
+   "support": [
+    "plug/synth/chip_libc.cpp"
+   ],
+   "def_has_dsp": true
   }
  ],
  "notices": {
-  "ot-synths": "Copied from opentracker-synths (https://github.com/opentracker-fw/opentracker-synths, modules/{module}, commit eb150a5f741b). Copyright (c) 2026 Marcin Spoczynski. MIT licence, text in LICENSE-OpenTracker-synths-MIT.txt. Not modified except a two line notice. Compiled against the OpenTracker 3.x headers (Apache License 2.0, text in LICENSE-OpenTracker-Apache-2.0.txt). The parameter metadata (engine_{module}.cpp) and the default macros are this project's own."
+  "ot-synths": "Copied from opentracker-synths (https://github.com/opentracker-fw/opentracker-synths, modules/{module}, commit eb150a5f741b). Copyright (c) 2026 Marcin Spoczynski. MIT licence, text in LICENSE-OpenTracker-synths-MIT.txt. Not modified except a two line notice. Compiled against the OpenTracker 3.x headers (Apache License 2.0, text in LICENSE-OpenTracker-Apache-2.0.txt). The parameter metadata (engine_{module}.cpp) and the default macros are this project's own.",
+  "polyend-chip": "Polyend's open Chiptune voice (core/synth/engines/ChiptuneSynthVoice.cpp of tracker-ff, from Polyend Tracker Community Edition) behind the PolySynth shim of tracker-ff (engine_chip.cpp, which follows the voice's createMetadata for the parameter table). Polyend Tracker Community Edition License (MIT with a Wholesale Commercial Clone Restriction), Copyright (c) 2020-2026 Polyend Sp. z o.o. and contributors, text in LICENSE-PolyendTracker-CE.txt. Compiled against the PolySynth headers and the fmt, boost, tiny and constexpr-string headers of tracker-ff util/3rdparty (licences in tracker-ff NOTICE.md section 16). Voice source unchanged apart from the FEATURE_SYNTH_OPEN hooks of tracker-ff."
  }
 }

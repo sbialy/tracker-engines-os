@@ -8,7 +8,7 @@
 //                 position in the stock Tracker+/Mini CE list ACD FAT VAP WTFM PERC DIRT CHIP (so a stock PERC part
 //                 is 4 and a stock CHIP part is 6 here as well), JU6 (7) and PHZ (8) come after it, then the other OpenTracker 3.x engines
 //                 FM4 (9) D-Type (10) CS-Type (11) A-Type (12) T-Type (13) 8-Type (14) Hand-Type (15) B-Type (16) Arc-Type (17), then our own PLK (18), the same
-//                 numbers as the editor stores. DIRT (5) has no open
+//                 numbers as the poly-editor stores. DIRT (5) has no open
 //                 engine, and PERC (4) has one only when it is picked: a project that uses an engine this build lacks
 //                 falls back to a default part. STORED is not the PATCH_ENGINE number (PERC is 4 stored but 6 in a
 //                 .patch, CHIP is 6 stored but 8 in a .patch). The number never depends on which engines are built in
