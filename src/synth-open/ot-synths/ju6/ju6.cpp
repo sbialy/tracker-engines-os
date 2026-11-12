@@ -1,5 +1,5 @@
 // Copied from opentracker-synths (https://github.com/opentracker-fw/opentracker-synths, modules/ju6/src/ju6.cpp, commit eb150a5f741b),
-// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Not modified, except this notice.
+// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Modified by tracker-ff: paraphony only (Chord Mode / Chord / Voicing, every change is marked PARA).
 // JU6 Juno-style poly engine (see ju6.h).
 //
 // Per sample: the DCO phase advances; the saw, the pulse (both edges) and the
@@ -16,6 +16,10 @@
 // The chorus runs once per slot on the voices' sum (slotPost): the shared BBD
 // chorus at the Juno's fixed settings (Mix 100, Width 100, Tone ~8.5 kHz),
 // each slot with its own line; Off leaves the bus untouched.
+// PARA: Chord Mode Para sounds the Chord (a note and up to 3 more DCOs) as ONE voice: one HPF, VCF, ADSR, VCA and LFO for all of
+// them, as a paraphonic polysynth. The extra DCOs render in their own pass into a block buffer (chordOsc) and the filter kernel
+// adds it (a second instance of the kernel: copies fused into the filter loop run out of FPU registers). Poly mode is the
+// unchanged kernel.
 #include "ju6.h"
 
 #include <cstring>
@@ -79,6 +83,17 @@ inline float lfoTri(float ph) { return ph < 0.25f ? 4.0f * ph : (ph < 0.75f ? 2.
 
 enum Stage : uint8_t { kIdle = 0, kAtt, kDec, kRel };
 
+// PARA: the chord table of the stock MIDI Chord FX (core/source/mtChordDefs.h chordDef, 68 masks): bit n = n semitones above the
+// played note, bit 0 (the note itself) always set. 1 single note, 22 triads, 45 four-note chords, so at most 3 extra DCOs.
+constexpr uint16_t kChordMask[kChordCount] = {
+    0x0001, 0x0085, 0x0105, 0x0049, 0x0089, 0x0091, 0x0111, 0x00A1, 0x0421, 0x1021, 0x00C1, 0x1081,
+    0x4081, 0x0285, 0x0485, 0x0885, 0x0249, 0x0449, 0x0189, 0x0289, 0x0489, 0x0889, 0x0291, 0x0491,
+    0x0891, 0x0311, 0x0511, 0x0911, 0x04A1, 0x08A1, 0x0109, 0x0221, 0x0211, 0x0121, 0x0231, 0x0123,
+    0x0129, 0x0225, 0x0149, 0x0229, 0x0245, 0x0209, 0x0241, 0x0441, 0x0051, 0x0043, 0x0821, 0x0251,
+    0x0125, 0x0131, 0x0113, 0x0151, 0x0115, 0x0445, 0x0191, 0x0119, 0x0223, 0x00A5, 0x0429, 0x0521,
+    0x00A9, 0x0215, 0x0621, 0x00B1, 0x010B, 0x00C5, 0x0431, 0x0143,
+};
+
 struct SlotState {
     uint32_t serial;
     uint32_t seed;                      // note-on phases and noise seeds
@@ -114,8 +129,15 @@ struct VoiceState {
     float pitch, vel;
     uint32_t noise;
     uint8_t stage, gate, started, kSet;
+    // PARA: the extra DCOs of the chord (nChord 0 = a plain voice, 1..3), their phase, sub square and pitch ratio to the played note
+    uint8_t nChord;
+    float cgain;                        // 1 / sqrt(notes): the DCO sum into the filter keeps the level of one note
+    float pph[3], psub[3], pratio[3];
 };
 static_assert(sizeof(VoiceState) <= kSynthVoiceStateBytes, "JU6 voice state");
+
+// PARA: the block buffer of the extra DCOs (the audio runs on one thread, voices render one after the other)
+float gChordBuf[kBlock];
 
 // Block-start values and per-frame increments.
 struct Ramp {
@@ -139,12 +161,16 @@ inline float blep(float t, float dt, float idt) {
     return 0.0f;
 }
 
-__attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const SlotState& S, Ramp r) {
+// PARA: kChord adds the extra DCOs' sum xb (chordOsc) to the DCO mix, scaled to the level of one note. kChord = false is the kernel
+// of the plain engine, instruction for instruction.
+template <bool kChord>
+__attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const SlotState& S, Ramp r, const float* xb) {
     float ph = V.ph, sub = V.sub, hp = V.hp;
     float s0 = V.s[0], s1 = V.s[1], s2 = V.s[2], s3 = V.s[3];
     uint32_t nz = V.noise;
     const float sawG = S.sawG, pulseG = S.pulseG, subG = S.subG, noiseG = S.noiseG;
     const float hpA = S.hpA, hpK = S.hpK;
+    const float cg = kChord ? V.cgain : 1.0f;
     for (uint32_t i = 0; i < kBlock; ++i) {
         const float dt = r.dt, idt = r.idt, pw = r.pw;
         ph += dt;
@@ -163,6 +189,7 @@ __attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const S
         nz = nz * 1664525u + 1013904223u;
         const float n = float(int32_t(nz)) * (1.0f / 2147483648.0f);
         float x = sawG * saw + pulseG * pulse + subG * sq + noiseG * n;
+        if (kChord) x = (x + xb[i]) * cg;
         // HPF.
         hp += hpA * (x - hp);
         x += hpK * hp;
@@ -202,6 +229,78 @@ __attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const S
     V.s[2] = s2;
     V.s[3] = s3;
     V.noise = nz;
+}
+
+// PARA: the extra DCOs of a chord voice, summed into xb with the gains of the main DCO (saw, pulse, sub; no noise). Each copy is the
+// played note's DCO at its pitch ratio: the same PWM and the same polyBLEP, its own phase.
+__attribute__((noinline)) void chordOsc(float* xb, VoiceState& V, const SlotState& S, const Ramp& r) {
+    const float sawG = S.sawG, pulseG = S.pulseG, subG = S.subG;
+    constexpr float n = 1.0f / float(kBlock);
+    for (uint32_t i = 0; i < kBlock; ++i) xb[i] = 0.0f;
+    const float dtEnd = r.dt + r.ddt * float(kBlock);
+    for (int c = 0; c < V.nChord; ++c) {
+        float ph = V.pph[c], sub = V.psub[c];
+        // The copy's increment can pass the polyBLEP range (a note of the chord up to 2 octaves above a high root): same clamp as the root.
+        const float d0 = clampf(r.dt * V.pratio[c], 1.0e-5f, 0.45f), d1 = clampf(dtEnd * V.pratio[c], 1.0e-5f, 0.45f);
+        float dt = d0, idt = 1.0f / d0, pw = r.pw;
+        const float ddt = (d1 - d0) * n, didt = (1.0f / d1 - idt) * n;
+        for (uint32_t i = 0; i < kBlock; ++i) {
+            ph += dt;
+            if (ph >= 1.0f) {
+                ph -= 1.0f;
+                sub = -sub;
+            }
+            const float b0 = blep(ph, dt, idt);
+            float q = ph - pw;
+            if (q < 0.0f) q += 1.0f;
+            const float b1 = blep(q, dt, idt);
+            xb[i] += sawG * (ph + ph - 1.0f - b0) + pulseG * ((ph < pw ? 1.0f : -1.0f) - (pw + pw - 1.0f) + b0 - b1) +
+                     subG * (sub + (ph < 0.5f ? sub : -sub) * b0);
+            dt += ddt;
+            idt += didt;
+            pw += r.dpw;
+        }
+        V.pph[c] = ph;
+        V.psub[c] = sub;
+    }
+}
+
+// PARA: the chord of a note-on into the voice: the Chord's notes as semitone offsets (ascending), the Voicing applied, then the pitch
+// ratio of each extra DCO. A reused voice (legato) keeps the phases it has.
+JU6_PER_BLOCK void latchChord(VoiceState& V, SlotState& S, const SynthParams& p, bool fresh) {
+    const int prev = fresh ? 0 : V.nChord;
+    V.nChord = 0;
+    if (p.count < kParamCount || enumOf(p.end[kChordMode], 1) != kChordPara) return;
+    const unsigned mask = kChordMask[enumOf(p.end[kChord], kChordCount - 1)];
+    int off[4], cnt = 0;
+    for (int b = 1; b < 15 && cnt < 3; ++b)
+        if (mask & (1u << b)) off[++cnt] = b;
+    if (!cnt) return;
+    off[0] = 0;
+    // Voicing: Drop 2 lowers the second note from the top an octave, Open raises the first note above the root, Spread the first two.
+    switch (enumOf(p.end[kVoicing], 3)) {
+        case kVoicDrop2:
+            if (cnt > 1) off[cnt - 1] -= 12;
+            break;
+        case kVoicOpen: off[1] += 12; break;
+        case kVoicSpread:
+            off[1] += 12;
+            if (cnt > 1) off[2] += 12;
+            break;
+        default: break;
+    }
+    for (int c = 0; c < cnt; ++c) {
+        // off[c + 1] is the chord's note c + 1 (off[0] is the root); a Drop 2 of a triad moved note 1
+        V.pratio[c] = fastExp2(float(off[c + 1]) * (1.0f / 12.0f));
+        if (c >= prev) {   // a new DCO starts at an arbitrary phase, like the root
+            S.seed = S.seed * 1664525u + 1013904223u;
+            V.pph[c] = float(S.seed >> 8) * (1.0f / 16777216.0f);
+            V.psub[c] = (S.seed & 0x80u) ? 1.0f : -1.0f;
+        }
+    }
+    static const float kGain[4] = {1.0f, 0.70710678f, 0.57735027f, 0.5f};   // 1 / sqrt(notes)
+    V.cgain = kGain[cnt];
+    V.nChord = uint8_t(cnt);
 }
 
 class Ju6Engine final : public ISynthEngine {
@@ -257,10 +356,11 @@ public:
         S.lfoPh1 = ph;
     }
 
-    JU6_PER_BLOCK void noteOn(SynthVoice& v, const SynthParams&, const SynthNote& n) override {
+    JU6_PER_BLOCK void noteOn(SynthVoice& v, const SynthParams& p, const SynthNote& n) override {
         SlotState& S = v.slotScratch->as<SlotState>();
         VoiceState& V = v.as<VoiceState>();
-        if (!n.reused || !V.started) {
+        const bool fresh = !n.reused || !V.started;
+        if (fresh) {
             // A fresh voice: the DCO is free-running, so its phase is arbitrary.
             S.seed = S.seed * 1664525u + 1013904223u;
             V.ph = float(S.seed >> 8) * (1.0f / 16777216.0f);
@@ -271,6 +371,7 @@ public:
             V.stage = kAtt;   // from the current level (no click on a reused voice)
             V.tOn = 0.0f;
         }
+        latchChord(V, S, p, fresh);   // PARA
         V.pitch = n.pitch;
         V.vel = clampf(n.velocity, 0.0f, 1.0f);
         V.gate = 1;
@@ -374,7 +475,12 @@ public:
         r.a = V.out * g0;
         r.da = (out1 * gEnd - V.out * g0) * n;
         V.out = out1;
-        kernel(L, R, V, S, r);
+        if (V.nChord) {   // PARA
+            chordOsc(gChordBuf, V, S, r);
+            kernel<true>(L, R, V, S, r, gChordBuf);
+        } else {
+            kernel<false>(L, R, V, S, r, nullptr);
+        }
         v.level = a1;
         // Env VCA: the release ended, or a held note decayed to Sustain 0.
         const bool done = S.gateVca ? (!V.gate && a1 == 0.0f)

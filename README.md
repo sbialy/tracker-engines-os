@@ -18,6 +18,14 @@ tracker-ff 1.2.0 is split into five repositories:
 The firmware pins a release of every module repository in its `engines/external.lock.json` and checks the published files against
 the engine numbers it keeps in `engines/engines.json`.
 
+## JU6 paraphony (1.1.0)
+
+JU6 has three parameters appended after Chorus: Chord Mode (Poly, Para), Chord (the 68 entries of the stock MIDI Chord FX, interval digits) and
+Voicing (Close, Drop 2, Open, Spread). Poly is the engine as it was, the other two are ignored, older patches play unchanged and bit identical.
+Para sounds the Chord from one note as up to four DCOs through the one HPF, VCF, ADSR, VCA and LFO, takes one pool voice and one note-on,
+and costs about two thirds of four polyphonic voices. The chord is read at every note-on, so a host that writes the step's chord into the Chord
+parameter (the planned MIDI Chord routing) needs nothing else. `tools/ju6_para_check.py OLD.plg NEW.plg` is the render diff and the chord checks.
+
 ## Layout
 
 | Path | What |
