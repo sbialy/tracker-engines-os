@@ -24,7 +24,7 @@ JU6 has three parameters appended after Chorus: Chord Mode (Poly, Para), Chord (
 Voicing (Close, Drop 2, Open, Spread). Poly is the engine as it was, the other two are ignored, older patches play unchanged and bit identical.
 Para sounds the Chord from one note as up to four DCOs through the one HPF, VCF, ADSR, VCA and LFO, takes one pool voice and one note-on,
 and costs about two thirds of four polyphonic voices. The chord is read at every note-on, so a host that writes the step's chord into the Chord
-parameter (the planned MIDI Chord routing) needs nothing else. `tools/ju6_para_check.py OLD.plg NEW.plg` is the render diff and the chord checks.
+parameter needs nothing else. The plugin answers PLUG_EXT_CHORD (ABI 1.2), so the paraphony host routes MIDI Chord steps on a Para patch to it. `tools/ju6_para_check.py OLD.plg NEW.plg` is the render diff and the chord checks.
 
 ## Layout
 
