@@ -1,5 +1,5 @@
 // Copied from opentracker-synths (https://github.com/opentracker-fw/opentracker-synths, modules/ju6/src/ju6.h, commit eb150a5f741b),
-// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Modified by tracker-ff: three paraphony parameters appended (kChordMode, kChord, kVoicing).
+// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Modified by tracker-ff: four paraphony parameters appended (kChordMode, kChord, kVoicing, kStrum).
 // JU6: a Juno-style polysynth voice (OpenTracker 3.x module engine, id 0x81,
 // module JU6S). Our own design after the voice described in the owner's
 // manuals of the classic one-DCO polysynths of the early 1980s: one DCO with
@@ -36,7 +36,7 @@ enum Param : int {
     kLfoRate, kLfoDelay,                                              // LFO
     kVolume,
     kChorus,                                                          // CHORUS (after Volume: older patches keep their indices)
-    kChordMode, kChord, kVoicing,                                     // PARAPHONY (appended: older patches keep their indices and play polyphonic)
+    kChordMode, kChord, kVoicing, kStrum,                              // PARAPHONY (appended: older patches keep their indices and play polyphonic)
     kParamCount,
 };
 enum PwMode : int { kPwManual = 0, kPwLfo };

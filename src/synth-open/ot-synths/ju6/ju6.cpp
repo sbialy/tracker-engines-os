@@ -1,5 +1,5 @@
 // Copied from opentracker-synths (https://github.com/opentracker-fw/opentracker-synths, modules/ju6/src/ju6.cpp, commit eb150a5f741b),
-// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Modified by tracker-ff: paraphony only (Chord Mode / Chord / Voicing, every change is marked PARA).
+// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Modified by tracker-ff: paraphony only (Chord Mode / Chord / Voicing / Strum, every change is marked PARA).
 // JU6 Juno-style poly engine (see ju6.h).
 //
 // Per sample: the DCO phase advances; the saw, the pulse (both edges) and the
@@ -40,6 +40,7 @@ namespace ju6 {
 namespace {
 
 constexpr float kBlockT = float(kBlock) / kSampleRate;
+constexpr uint32_t kBlockUs = 2901;   // PARA strum: one block in us (128 / 44,117.647 Hz = 2,901.3 us)
 constexpr float kInvFs = 1.0f / kSampleRate;
 constexpr float kPi = 3.14159265f;
 constexpr float kLog2e = 1.44269504f;
@@ -133,6 +134,10 @@ struct VoiceState {
     uint8_t nChord;
     float cgain;                        // 1 / sqrt(notes): the DCO sum into the filter keeps the level of one note
     float pph[3], psub[3], pratio[3];
+    // PARA strum: the block each note starts in (0 the played note, 1..3 the extra DCOs), counted from the note on in strumBlk.
+    // All 0 without a strum, so an unstrummed voice renders as before.
+    uint8_t onset[4];
+    uint8_t strumBlk;
 };
 static_assert(sizeof(VoiceState) <= kSynthVoiceStateBytes, "JU6 voice state");
 
@@ -164,7 +169,7 @@ inline float blep(float t, float dt, float idt) {
 // PARA: kChord adds the extra DCOs' sum xb (chordOsc) to the DCO mix, scaled to the level of one note. kChord = false is the kernel
 // of the plain engine, instruction for instruction.
 template <bool kChord>
-__attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const SlotState& S, Ramp r, const float* xb) {
+__attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const SlotState& S, Ramp r, const float* xb, bool rootOn) {
     float ph = V.ph, sub = V.sub, hp = V.hp;
     float s0 = V.s[0], s1 = V.s[1], s2 = V.s[2], s3 = V.s[3];
     uint32_t nz = V.noise;
@@ -189,7 +194,7 @@ __attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const S
         nz = nz * 1664525u + 1013904223u;
         const float n = float(int32_t(nz)) * (1.0f / 2147483648.0f);
         float x = sawG * saw + pulseG * pulse + subG * sq + noiseG * n;
-        if (kChord) x = (x + xb[i]) * cg;
+        if (kChord) x = ((rootOn ? x : noiseG * n) + xb[i]) * cg;   // PARA strum: the played note waits for its onset block
         // HPF.
         hp += hpA * (x - hp);
         x += hpK * hp;
@@ -233,12 +238,13 @@ __attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const S
 
 // PARA: the extra DCOs of a chord voice, summed into xb with the gains of the main DCO (saw, pulse, sub; no noise). Each copy is the
 // played note's DCO at its pitch ratio: the same PWM and the same polyBLEP, its own phase.
-__attribute__((noinline)) void chordOsc(float* xb, VoiceState& V, const SlotState& S, const Ramp& r) {
+__attribute__((noinline)) void chordOsc(float* xb, VoiceState& V, const SlotState& S, const Ramp& r, uint32_t blk) {
     const float sawG = S.sawG, pulseG = S.pulseG, subG = S.subG;
     constexpr float n = 1.0f / float(kBlock);
     for (uint32_t i = 0; i < kBlock; ++i) xb[i] = 0.0f;
     const float dtEnd = r.dt + r.ddt * float(kBlock);
     for (int c = 0; c < V.nChord; ++c) {
+        if (V.onset[c + 1] > blk) continue;   // PARA strum: this note has not started yet
         float ph = V.pph[c], sub = V.psub[c];
         // The copy's increment can pass the polyBLEP range (a note of the chord up to 2 octaves above a high root): same clamp as the root.
         const float d0 = clampf(r.dt * V.pratio[c], 1.0e-5f, 0.45f), d1 = clampf(dtEnd * V.pratio[c], 1.0e-5f, 0.45f);
@@ -270,6 +276,8 @@ __attribute__((noinline)) void chordOsc(float* xb, VoiceState& V, const SlotStat
 JU6_PER_BLOCK void latchChord(VoiceState& V, SlotState& S, const SynthParams& p, bool fresh) {
     const int prev = fresh ? 0 : V.nChord;
     V.nChord = 0;
+    for (uint8_t& o : V.onset) o = 0;
+    V.strumBlk = 0;
     if (p.count < kParamCount || enumOf(p.end[kChordMode], 1) != kChordPara) return;
     const unsigned mask = kChordMask[enumOf(p.end[kChord], kChordCount - 1)];
     int off[4], cnt = 0;
@@ -301,6 +309,18 @@ JU6_PER_BLOCK void latchChord(VoiceState& V, SlotState& S, const SynthParams& p,
     static const float kGain[4] = {1.0f, 0.70710678f, 0.57735027f, 0.5f};   // 1 / sqrt(notes)
     V.cgain = kGain[cnt];
     V.nChord = uint8_t(cnt);
+    // PARA strum: note k of cnt + 1 starts after k (up) or cnt - k (down) strum gaps, rounded to whole blocks from the note on (the
+    // sequencer's strum starts its notes on block boundaries too). A late note starts its saw at phase 0.5 (output 0, no step).
+    const float sv = clampf(p.end[kStrum], -63.0f, 63.0f);
+    const int st = int(sv + (sv < 0.0f ? -0.5f : 0.5f));
+    if (st) {
+        const uint32_t gapUs = uint32_t(st < 0 ? -st : st) * 2000u;
+        for (int k = 0; k <= cnt; ++k) {
+            const uint32_t order = uint32_t(st > 0 ? k : cnt - k);
+            V.onset[k] = uint8_t((order * gapUs + kBlockUs / 2) / kBlockUs);
+            if (k && V.onset[k]) V.pph[k - 1] = 0.5f;
+        }
+    }
 }
 
 class Ju6Engine final : public ISynthEngine {
@@ -476,10 +496,14 @@ public:
         r.da = (out1 * gEnd - V.out * g0) * n;
         V.out = out1;
         if (V.nChord) {   // PARA
-            chordOsc(gChordBuf, V, S, r);
-            kernel<true>(L, R, V, S, r, gChordBuf);
+            const uint32_t sb = V.strumBlk;
+            const bool rootOn = V.onset[0] <= sb;
+            chordOsc(gChordBuf, V, S, r, sb);
+            kernel<true>(L, R, V, S, r, gChordBuf, rootOn);
+            if (!rootOn) V.ph = 0.5f;   // a down strum holds the played note back, its phase waits
+            if (sb < 255u) V.strumBlk = uint8_t(sb + 1u);
         } else {
-            kernel<false>(L, R, V, S, r, nullptr);
+            kernel<false>(L, R, V, S, r, nullptr, true);
         }
         v.level = a1;
         // Env VCA: the release ended, or a held note decayed to Sustain 0.

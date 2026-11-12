@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """JU6 paraphony checks on two .plg files in Unicorn (host only, never shipped).
 
-    TOOLCHAIN=.../arm-none-eabi- python3 -I tools/ju6_para_check.py OLD.plg NEW.plg [--blocks 48] [--seeds 40]
+    TOOLCHAIN=.../arm-none-eabi- python3 -I tools/ju6_para_check.py OLD.plg NEW.plg [--base BASE.plg] [--blocks 48] [--seeds 40]
 
-OLD is the JU6 before paraphony (23 parameters), NEW the one with Chord Mode / Chord / Voicing (26).
+OLD is the JU6 before paraphony (23 parameters), NEW the one with Chord Mode / Chord / Voicing / Strum (27), BASE (optional) the
+paraphonic JU6 before the Strum parameter (26).
 1. Render diff, Chord Mode Poly: random patches over the 23 old parameters (enums included), 1 voice and a 4 voice chord, with random
    Chord / Voicing values that must be ignored, plus a ramped Cutoff (p.moving). OLD and NEW must agree on every float bit.
 2. Chord Mode Para with Chord 0 (the played note only) equals Poly bit for bit.
 3. Paraphony is a chord: Para with a maj7 chord on a wide open filter has the fundamentals of the four notes at the level of the
    single notes (scaled by 1 / sqrt(4)), and Poly with the same one note does not.
 4. Every chord of the 68 entry table and all 4 voicings render finite and stay below 4.0 (the DCO sum is scaled to one note).
+5. Strum 0 is the engine as it was: Para renders of random patches, chords and voicings are bit identical to BASE, and a Strum value on
+   a Poly voice or on Chord 0 changes nothing.
+6. Strum: the chord notes of a Para voice start N * 2 ms apart (rounded to whole 2,901 us blocks), + up (the played note first), -
+   down (the top note first), measured from the fundamentals of an open filter, a sliding Goertzel window centred on each block.
 Exit 0 = all pass.
 """
 import argparse
@@ -54,6 +59,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("old")
     ap.add_argument("new")
+    ap.add_argument("--base", default=None)
     ap.add_argument("--blocks", type=int, default=48)
     ap.add_argument("--seeds", type=int, default=40)
     a = ap.parse_args()
@@ -61,11 +67,13 @@ def main():
     harness = os.path.join("/tmp", "ju6_para_harness.plg")
     R.build_harness(tc, harness)
     old, new = R.Run(a.old, harness, BASE), R.Run(a.new, harness, BASE)
-    assert old.nparams == 23 and new.nparams == 26, (old.nparams, new.nparams)
+    assert old.nparams == 23 and new.nparams == 27, (old.nparams, new.nparams)
     for i, (o, n) in enumerate(zip(old.params, new.params)):
         assert o == n, ("parameter %d differs" % i, o, n)
     kmode, kchord, kvoic = new.pidx("Chord Mode"), new.pidx("Chord"), new.pidx("Voicing")
     assert (kmode, kchord, kvoic) == (23, 24, 25)
+    kstrum = new.pidx("Strum")
+    assert kstrum == 26 and new.params[kstrum] == ("Strum", 0.0, -63.0, 63.0), new.params[kstrum:]
     rng = random.Random(1)
     fails = 0
 
@@ -140,6 +148,78 @@ def main():
     ok4 = bad == 0 and worst < 4.0
     print("4. 68 chords x 4 voicings: non finite %d, peak %.3f: %s" % (bad, worst, "PASS" if ok4 else "FAIL"))
     fails += not ok4
+    # 5. Strum 0 is the engine as it was
+    if a.base:
+        base = R.Run(a.base, harness, BASE)
+        assert base.nparams == 26, base.nparams
+        n5 = bad5 = 0
+        for seed in range(a.seeds):
+            over = []
+            for i, (nm, df, mn, mx) in enumerate(base.params):
+                if nm == "Volume":
+                    continue
+                v = rng.uniform(mn, mx)
+                if mx - mn <= 3 and float(mx).is_integer():
+                    v = float(rng.randint(int(mn), int(mx)))
+                over.append((i, v))
+            over = [(i, v) for i, v in over if i not in (kmode, kchord, kvoic)]
+            over += [(kmode, 1.0), (kchord, float(rng.randint(0, 67))), (kvoic, float(rng.randint(0, 3)))]
+            for voices, notes in ((1, [48]), (1, [60, 64, 67]), (4, [48, 55, 60, 64])):
+                fb, _, _ = base.run(a.blocks, voices, notes, a.blocks * 2 // 3, over)
+                fn, _, _ = new.run(a.blocks, voices, notes, a.blocks * 2 // 3, over + [(kstrum, 0.0)])
+                n5 += 1
+                if fb.tobytes() != fn.tobytes():
+                    bad5 += 1
+                    print("FAIL Strum 0 differs from the paraphonic base: seed %d voices %d" % (seed, voices))
+        # a Strum value where there is nothing to strum: Poly, and Para with one note
+        for mode, chord in ((0.0, maj7), (1.0, 0)):
+            fz, _, _ = new.run(a.blocks, 1, [60], 32, patch + [(kmode, mode), (kchord, float(chord)), (kstrum, 0.0)])
+            fs, _, _ = new.run(a.blocks, 1, [60], 32, patch + [(kmode, mode), (kchord, float(chord)), (kstrum, 37.0)])
+            n5 += 1
+            if fz.tobytes() != fs.tobytes():
+                bad5 += 1
+                print("FAIL Strum changes a voice with nothing to strum (mode %g chord %d)" % (mode, chord))
+        ok5 = bad5 == 0
+        print("5. Strum 0 vs paraphonic base: %d renders, %d differ: %s" % (n5, bad5, "PASS" if ok5 else "FAIL"))
+        fails += not ok5
+    else:
+        print("5. skipped (no --base)")
+
+    # 6. strum timing and order. 5add9 (0 7 14): the fundamentals are far enough apart, none is a harmonic of another
+    strum_chord = next(i for i in range(68) if chord_notes(0, i) == [0, 7, 14])
+    notes6 = chord_notes(root, strum_chord)
+    hz6 = [440.0 * 2 ** ((n - 69) / 12.0) for n in notes6]
+    nb6, win = 200, 2048
+
+    def onsets(strum):
+        f, _, _ = new.run(nb6, 1, [root], nb6, patch + [(kmode, 1.0), (kchord, float(strum_chord)), (kstrum, float(strum))])
+        sig = f[:, 0, :].reshape(-1)
+        out = []
+        for hz in hz6:
+            lv = []
+            for b in range(nb6):
+                c = b * 128 + 64
+                lo, hi = max(0, c - win // 2), min(len(sig), c + win // 2)
+                seg = sig[lo:hi] * np.hanning(hi - lo)
+                t = np.arange(lo, hi)
+                lv.append(abs(np.sum(seg * np.exp(-2j * np.pi * hz / 44117.647 * t))) / (hi - lo))
+            lv = np.array(lv)
+            ref = lv[nb6 - 40:nb6 - 8].mean()
+            out.append(int(np.argmax(lv > 0.5 * ref)))
+        return out
+
+    ok6 = True
+    for st in (30, -30, 15, 0):
+        gap = abs(st) * 2000.0 / 2901.0
+        want = [(k if st >= 0 else 2 - k) * gap for k in range(3)]
+        got = onsets(st)
+        base0 = min(got)
+        rel = [g - base0 for g in got]
+        good = all(abs(r - (w - min(want))) <= 4.5 for r, w in zip(rel, want))
+        ok6 = ok6 and good
+        print("   Strum %+3d: onset blocks %s, expected relative %s%s" % (st, rel, ["%.1f" % (w - min(want)) for w in want], "" if good else "  <-- off"))
+    print("6. strum timing and order: %s" % ("PASS" if ok6 else "FAIL"))
+    fails += not ok6
     print("RESULT %s" % ("PASS" if not fails else "FAIL (%d)" % fails))
     return 1 if fails else 0
 

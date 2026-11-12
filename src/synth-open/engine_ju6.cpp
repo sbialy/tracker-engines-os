@@ -5,7 +5,7 @@
 //
 // The built-in chorus runs once per slot on the voice sum (ISynthEngine::slotPost), see EngineDef::slotFx.
 //
-// tracker-ff addition: paraphony. Chord Mode / Chord / Voicing are appended after Chorus (indices 23 to 25), so every older patch
+// tracker-ff addition: paraphony. Chord Mode / Chord / Voicing / Strum are appended after Chorus (indices 23 to 26), so every older patch
 // keeps its values and plays polyphonic (Chord Mode Poly = the engine as it was). Chord is the stock MIDI Chord FX table (68
 // entries, 0 = the played note), named like the FX value list. The "Chord" section is last.
 #include "open_engine.h"
@@ -63,6 +63,8 @@ const ParamDef kParams[Param::kParamCount] = {
     { "Chord Mode", 0, 0, 1, F::kEnum, C::kLinear, kChordMode },
     { "Chord", 0, 0, ot::audio::ju6::kChordCount - 1, F::kEnum, C::kLinear, kChordName },
     { "Voicing", 0, 0, 3, F::kEnum, C::kLinear, kVoicing },
+    // Para strum: the chord notes start one after another, 2 ms a unit, + up (the played note first), - down. A Strum FX step sets it
+    { "Strum", 0, -63, 63, F::kInt, C::kLinear, nullptr },
 };
 
 const uint8_t kDco[] = { Param::kSaw, Param::kPulse, Param::kPw, Param::kPwMode, Param::kSub, Param::kNoise,
@@ -73,7 +75,7 @@ const uint8_t kVcaSec[] = { Param::kVcaMode, Param::kVolume };
 const uint8_t kEnv[] = { Param::kAttack, Param::kDecay, Param::kSustain, Param::kRelease };
 const uint8_t kLfo[] = { Param::kLfoRate, Param::kLfoDelay };
 const uint8_t kCho[] = { Param::kChorus };
-const uint8_t kPara[] = { Param::kChordMode, Param::kChord, Param::kVoicing };
+const uint8_t kPara[] = { Param::kChordMode, Param::kChord, Param::kVoicing, Param::kStrum };
 
 // The editor picks the section icon from the name ("Oscillator", "Filter", "Amplifier", ...)
 const SectionDef kSections[] = {
