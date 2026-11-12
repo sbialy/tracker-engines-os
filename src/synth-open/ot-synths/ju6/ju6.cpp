@@ -26,6 +26,7 @@
 
 #include "audio/bbd_chorus.h"
 #include "audio/dsp.h"
+#include "plug/strum_ramp.h"
 
 #if defined(__GNUC__) && !defined(__clang__)
 #define JU6_PER_BLOCK __attribute__((optimize("Os")))
@@ -138,8 +139,17 @@ struct VoiceState {
     // All 0 without a strum, so an unstrummed voice renders as before.
     uint8_t onset[4];
     uint8_t strumBlk;
+    // PARA strum velocity ramp (plug/strum_ramp.h): the time order of each note, 2 bits per note (note k at bits 2k+1..2k, k 0 the
+    // played note), and the strum size in units. rampUnits 0 (no strum, or STRUM_RAMP=0) is a factor of exactly 1.0 for every note.
+    uint8_t rampOrd;
+    uint8_t rampUnits;
 };
 static_assert(sizeof(VoiceState) <= kSynthVoiceStateBytes, "JU6 voice state");
+
+// PARA strum velocity ramp: the level factor of note k (0 the played note, 1..3 the extra DCOs), exactly 1.0f without a strum
+inline float rampGain(const VoiceState& V, uint32_t k) {
+    return V.rampUnits ? strumramp::gain(int(V.rampOrd >> (2u * k) & 3u), int(V.rampUnits)) : 1.0f;
+}
 
 // PARA: the block buffer of the extra DCOs (the audio runs on one thread, voices render one after the other)
 float gChordBuf[kBlock];
@@ -169,11 +179,13 @@ inline float blep(float t, float dt, float idt) {
 // PARA: kChord adds the extra DCOs' sum xb (chordOsc) to the DCO mix, scaled to the level of one note. kChord = false is the kernel
 // of the plain engine, instruction for instruction.
 template <bool kChord>
-__attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const SlotState& S, Ramp r, const float* xb, bool rootOn) {
+__attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const SlotState& S, Ramp r, const float* xb, bool rootOn, float rootG) {
     float ph = V.ph, sub = V.sub, hp = V.hp;
     float s0 = V.s[0], s1 = V.s[1], s2 = V.s[2], s3 = V.s[3];
     uint32_t nz = V.noise;
-    const float sawG = S.sawG, pulseG = S.pulseG, subG = S.subG, noiseG = S.noiseG;
+    // PARA strum velocity ramp: the played note's DCO gains scaled once per block (rootG 1.0f is exact), the noise stays
+    const float sawG = kChord ? S.sawG * rootG : S.sawG, pulseG = kChord ? S.pulseG * rootG : S.pulseG,
+                subG = kChord ? S.subG * rootG : S.subG, noiseG = S.noiseG;
     const float hpA = S.hpA, hpK = S.hpK;
     const float cg = kChord ? V.cgain : 1.0f;
     for (uint32_t i = 0; i < kBlock; ++i) {
@@ -239,12 +251,13 @@ __attribute__((noinline)) void kernel(float* L, float* R, VoiceState& V, const S
 // PARA: the extra DCOs of a chord voice, summed into xb with the gains of the main DCO (saw, pulse, sub; no noise). Each copy is the
 // played note's DCO at its pitch ratio: the same PWM and the same polyBLEP, its own phase.
 __attribute__((noinline)) void chordOsc(float* xb, VoiceState& V, const SlotState& S, const Ramp& r, uint32_t blk) {
-    const float sawG = S.sawG, pulseG = S.pulseG, subG = S.subG;
     constexpr float n = 1.0f / float(kBlock);
     for (uint32_t i = 0; i < kBlock; ++i) xb[i] = 0.0f;
     const float dtEnd = r.dt + r.ddt * float(kBlock);
     for (int c = 0; c < V.nChord; ++c) {
         if (V.onset[c + 1] > blk) continue;   // PARA strum: this note has not started yet
+        const float gR = rampGain(V, uint32_t(c + 1));   // PARA strum velocity ramp
+        const float sawG = S.sawG * gR, pulseG = S.pulseG * gR, subG = S.subG * gR;
         float ph = V.pph[c], sub = V.psub[c];
         // The copy's increment can pass the polyBLEP range (a note of the chord up to 2 octaves above a high root): same clamp as the root.
         const float d0 = clampf(r.dt * V.pratio[c], 1.0e-5f, 0.45f), d1 = clampf(dtEnd * V.pratio[c], 1.0e-5f, 0.45f);
@@ -278,6 +291,8 @@ JU6_PER_BLOCK void latchChord(VoiceState& V, SlotState& S, const SynthParams& p,
     V.nChord = 0;
     for (uint8_t& o : V.onset) o = 0;
     V.strumBlk = 0;
+    V.rampOrd = 0;
+    V.rampUnits = 0;
     if (p.count < kParamCount || enumOf(p.end[kChordMode], 1) != kChordPara) return;
     const unsigned mask = kChordMask[enumOf(p.end[kChord], kChordCount - 1)];
     int off[4], cnt = 0;
@@ -319,7 +334,9 @@ JU6_PER_BLOCK void latchChord(VoiceState& V, SlotState& S, const SynthParams& p,
             const uint32_t order = uint32_t(st > 0 ? k : cnt - k);
             V.onset[k] = uint8_t((order * gapUs + kBlockUs / 2) / kBlockUs);
             if (k && V.onset[k]) V.pph[k - 1] = 0.5f;
+            V.rampOrd = uint8_t(V.rampOrd | order << (2u * k));
         }
+        if (STRUM_RAMP) V.rampUnits = uint8_t(st < 0 ? -st : st);
     }
 }
 
@@ -499,11 +516,11 @@ public:
             const uint32_t sb = V.strumBlk;
             const bool rootOn = V.onset[0] <= sb;
             chordOsc(gChordBuf, V, S, r, sb);
-            kernel<true>(L, R, V, S, r, gChordBuf, rootOn);
+            kernel<true>(L, R, V, S, r, gChordBuf, rootOn, rampGain(V, 0));
             if (!rootOn) V.ph = 0.5f;   // a down strum holds the played note back, its phase waits
             if (sb < 255u) V.strumBlk = uint8_t(sb + 1u);
         } else {
-            kernel<false>(L, R, V, S, r, nullptr, true);
+            kernel<false>(L, R, V, S, r, nullptr, true, 1.0f);
         }
         v.level = a1;
         // Env VCA: the release ended, or a held note decayed to Sustain 0.
