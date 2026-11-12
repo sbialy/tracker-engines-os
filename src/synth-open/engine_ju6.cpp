@@ -97,25 +97,6 @@ const MacroDef kMacros[] = {
 
 } // namespace
 
-// ---- PARA-HOST STUB (tracker-ff `paraphony` firmware branch, poly-para-host) --------------------------------------------------
-// The host side of the chord (ref/alco-paraphonic.md 3b): a MIDI Chord step on a part whose patch is paraphonic becomes ONE note-on,
-// and the host writes the step's chord index (the stock chordDef index, 0 to 67) into the engine's Chord parameter for that note-on
-// only. The engine already latches Chord at every note-on (ot-synths/ju6 latchChord), so this is all the host has to know:
-//   PLUG_EXT_CHORD (plug_abi.h, being defined by poly-para-host, NOT in the vendored ABI yet) -> { struct_size, param_index [, mode] }
-// kJu6ChordExt is that answer for JU6. It is not wired into the plugin descriptor: plugsynth::query (synth_plug.h, vendored SDK)
-// answers PLUG_EXT_SYNTH only. When the ABI has the id, the sdk-sync brings the query hook and ju6_plug.cpp passes this struct to it.
-// mode_param is the one open point against the design doc: the host must write Chord only while Chord Mode is Para (the patch's
-// poly / paraphonic choice), in Poly mode the engine ignores Chord and plays the root, so the host has to keep the stock N note-ons.
-struct Ju6ChordExt
-{
-    uint32_t struct_size;
-    uint32_t param_index;   // the engine's Chord parameter (enum, chordDef order)
-    uint32_t mode_param;    // the Chord Mode parameter (0 Poly, 1 Para): the host routes only while it reads Para
-};
-extern const Ju6ChordExt kJu6ChordExt;
-const Ju6ChordExt kJu6ChordExt = { sizeof(Ju6ChordExt), Param::kChord, Param::kChordMode };
-// ---- end PARA-HOST STUB -------------------------------------------------------------------------------------------------------
-
 const EngineDef kJu6Def = {
     "JU6",
     0x81, // no Polyend id: OpenTracker's engine id, see engine_list.h
