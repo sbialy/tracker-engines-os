@@ -11,7 +11,7 @@
   "fused": {
    "engines": "-O2",
    "o3": "-O3",
-   "note": "compiler default fp contraction, the unpublished AUTO fallback"
+   "note": "compiler default fp contraction, an unpublished fallback"
   }
  },
  "fwflags": "-std=gnu++20 -felide-constructors -include cstdint -fno-rtti -fno-exceptions -fno-common -ffunction-sections -fdata-sections -ffreestanding -fno-builtin -O2 -DNDEBUG -mfp16-format=ieee",

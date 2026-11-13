@@ -2,7 +2,7 @@
 """Render compare of chip.plg against the CHIP engine that was built into the firmware image (the bit identity gate of the move).
 
     TOOLCHAIN=.../arm-none-eabi- python3 tools/chip_render_compare.py --plg chip.plg --fw-tree WORKTREE_AT_0f41d40 --make-n make-n.txt \
-        [--py /tmp/phzvenv/bin/python]
+        [--py /path/to/venv/bin/python]
 
 The reference is what the firmware itself compiled when CHIP was built in: the compile lines of engine_chip.cpp and
 core/synth/engines/ChiptuneSynthVoice.cpp (make -n of the release recipe on the tree that still had CHIP, SYNTH_ENGINES with CHIP,

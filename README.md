@@ -45,7 +45,7 @@ make package                             # build/tracker-ff-engines-1.0.0-autof.
 ```
 
 `FLAVOUR=autof` (default) is the tracker-ff 1.2.0 release flavour: `-O2 -ffp-contract=off` on every engine, FM4 and B-Type at `-O3`.
-`FLAVOUR=fused` keeps the compiler's fused multiply add (the unpublished AUTO fallback). The build is byte reproducible: the same
+`FLAVOUR=fused` keeps the compiler's fused multiply add (an unpublished fallback). The build is byte reproducible: the same
 toolchain gives the same files, no dates or paths are written. The 1.2.0 set built here is byte identical to the `.plg` and `.plgi`
 files of the tracker-ff 1.2.0 release.
 

@@ -133,8 +133,8 @@ const EngineRef& engineAt(int ui);
 int engineUiForStored(int stored);   // -1: not in the list
 // A plugin engine number (stored kPlugStoredFirst..kPlugStoredLast) that is neither built in nor in the list: the one placeholder
 // definition, type kMissingTypeId, no parameters and no engine. A part on it stays silent and keeps its project values and patch
-// files untouched ("missing" state), the plugin on the card brings it back. Round G: any number in the range, no list of known
-// engines (before: the 12 engines of 1.1.0 by name, FORM and FLUX lost their parts). nullptr for any other number (a Polyend
+// files untouched ("missing" state), the plugin on the card brings it back. Any number in the range, no list of known
+// engines (before: the 12 engines of 1.1.0 by name). nullptr for any other number (a Polyend
 // number 0 to 5 this build has not got: the part falls back to the defaults, as before). 6 is CHIP, the one Polyend engine that is a
 // plugin (chip.plg), so it is in the range and a part on CHIP without its plugin is Missing, not reset to the defaults.
 constexpr int kPlugStoredFirst = 6, kPlugStoredLast = 255;   // engines.json: the plugin engines' stored numbers (6 and 7 to 20 in 1.3.0)
