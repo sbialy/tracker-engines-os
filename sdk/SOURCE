@@ -1,1 +1,1 @@
-tracker-ff-v1.3.0 tracker-ff release the files of sdk/files/ were copied from (tools/sdk_sync.py sync writes the commit)
+tracker-ff-1.4.0-dev tracker-ff 1.4.0 development tree the files of sdk/files/ were copied from (plug_abi.h, synth_plug.h and strum_ramp.h only, the rest equals tracker-ff-v1.3.0)
