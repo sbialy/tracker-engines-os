@@ -4,6 +4,10 @@
 // Spoczynski, see licenses/LICENSE-OpenTracker-synths-MIT.txt). Edit curves and the default macros are this shim's choice.
 //
 // The built-in chorus runs once per slot on the voice sum (ISynthEngine::slotPost), see EngineDef::slotFx.
+//
+// tracker-ff addition: paraphony. Chord Mode / Chord / Voicing / Strum are appended after Chorus (indices 23 to 26), so every older patch
+// keeps its values and plays polyphonic (Chord Mode Poly = the engine as it was). Chord is the stock MIDI Chord FX table (68
+// entries, 0 = the played note), named like the FX value list. The "Chord" section is last.
 #include "open_engine.h"
 
 #include "PolySynth/config.h"
@@ -19,6 +23,15 @@ const char* const kPwm[] = { "Manual", "LFO" };
 const char* const kHpf[] = { "0 Boost", "1 Flat", "2", "3" };
 const char* const kVca[] = { "Env", "Gate" };
 const char* const kChorus[] = { "Off", "I", "II" };
+const char* const kChordMode[] = { "Poly", "Para" };
+const char* const kVoicing[] = { "Close", "Drop 2", "Open", "Spread" };
+// The interval digits of the MIDI Chord FX value list (core/source/mtChordDefs.h chordDefName), one name per chordDef entry
+const char* const kChordName[ot::audio::ju6::kChordCount] = {
+    "---", "27",  "28",  "36",  "37",  "47",  "48",  "57",  "5A",  "5C",  "67",  "7C",  "7E",  "279", "27A", "27B", "369", "36A", "378",
+    "379", "37A", "37B", "479", "47A", "47B", "489", "48A", "48B", "57A", "57B", "38",  "59",  "49",  "58",  "459", "158", "358", "259",
+    "368", "359", "269", "39",  "69",  "6A",  "46",  "16",  "5B",  "469", "258", "458", "148", "468", "248", "26A", "478", "348", "159",
+    "257", "35A", "58A", "357", "249", "59A", "457", "138", "267", "45A", "168",
+};
 
 using F = Fmt;
 using C = CurveKind;
@@ -47,6 +60,11 @@ const ParamDef kParams[Param::kParamCount] = {
     { "LFO Delay", 0.6f, 0, 5, F::kSec, C::kPower, nullptr },
     { "Volume", 1, 0, 2, F::kPct, C::kLinear, nullptr },
     { "Chorus", 0, 0, 2, F::kEnum, C::kLinear, kChorus },
+    { "Chord Mode", 0, 0, 1, F::kEnum, C::kLinear, kChordMode },
+    { "Chord", 0, 0, ot::audio::ju6::kChordCount - 1, F::kEnum, C::kLinear, kChordName },
+    { "Voicing", 0, 0, 3, F::kEnum, C::kLinear, kVoicing },
+    // Para strum: the chord notes start one after another, 2 ms a unit, + up (the played note first), - down. A Strum FX step sets it
+    { "Strum", 0, -63, 63, F::kInt, C::kLinear, nullptr },
 };
 
 const uint8_t kDco[] = { Param::kSaw, Param::kPulse, Param::kPw, Param::kPwMode, Param::kSub, Param::kNoise,
@@ -57,6 +75,7 @@ const uint8_t kVcaSec[] = { Param::kVcaMode, Param::kVolume };
 const uint8_t kEnv[] = { Param::kAttack, Param::kDecay, Param::kSustain, Param::kRelease };
 const uint8_t kLfo[] = { Param::kLfoRate, Param::kLfoDelay };
 const uint8_t kCho[] = { Param::kChorus };
+const uint8_t kPara[] = { Param::kChordMode, Param::kChord, Param::kVoicing, Param::kStrum };
 
 // The editor picks the section icon from the name ("Oscillator", "Filter", "Amplifier", ...)
 const SectionDef kSections[] = {
@@ -66,6 +85,7 @@ const SectionDef kSections[] = {
     { "Envelope", "ENV", kEnv, sizeof(kEnv) },
     { "LFO", "LFO", kLfo, sizeof(kLfo) },
     { "Modulation", "Chorus", kCho, sizeof(kCho) },
+    { "Chord", "CHORD", kPara, sizeof(kPara) },
 };
 
 const MacroDef kMacros[] = {

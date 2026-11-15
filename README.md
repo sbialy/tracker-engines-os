@@ -18,6 +18,14 @@ tracker-ff 1.2.0 is split into five repositories:
 The firmware pins a release of every module repository in its `engines/external.lock.json` and checks the published files against
 the engine numbers it keeps in `engines/engines.json`.
 
+## JU6 paraphony (1.1.0)
+
+JU6 has four parameters appended after Chorus: Chord Mode (Poly, Para), Chord (the 68 entries of the stock MIDI Chord FX, interval digits),
+Voicing (Close, Drop 2, Open, Spread) and Strum. Poly is the engine as it was, the other three are ignored, older patches play unchanged and bit identical.
+Para sounds the Chord from one note as up to four DCOs through the one HPF, VCF, ADSR, VCA and LFO, takes one pool voice and one note-on,
+and costs about two thirds of four polyphonic voices. The chord is read at every note-on, so a host that writes the step's chord into the Chord
+parameter needs nothing else. The plugin answers PLUG_EXT_CHORD (ABI 1.2), so the paraphony host routes MIDI Chord steps on a Para patch to it. Strum (-63 to 63, 2 ms a unit, + up with the played note first, - down with the top note first, 0 off) starts the notes of a Para chord one after another, each in the block its time falls in (2.9 ms steps), and a Strum FX of the step sets it for that note-on only (`strum_param` of the chord query, id 6). A note that has not started yet is silent, a late DCO starts at saw phase 0.5. Strum 0 renders bit for bit as before. `tools/ju6_para_check.py OLD.plg NEW.plg --base BASE.plg` is the render diff, the chord checks, the Strum 0 identity and the strum timing.
+
 ## Layout
 
 | Path | What |
