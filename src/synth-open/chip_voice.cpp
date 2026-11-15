@@ -529,6 +529,22 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
         float freqNote = 0.0f;
         float freqHz = 0.0f;
         bool freqValid = false;
+
+        // A block that starts in Sustain stays there (a note off comes between blocks): every sample's level is the sustain level,
+        // the first sample computes the filter coefficient from it and the others find the level unchanged. Computed here once with
+        // the same expressions, the loop then runs without the per sample test.
+        bool filterMoves = hasFilterEnv;
+        if (hasFilterEnv && stage == EnvStage::kSustain)
+        {
+            cachedFilterEnvLevel = sustainLevel;
+            cachedEnvCutoff = std::clamp(cutoffHz * fastPow2(filterEnvScale * sustainLevel), 40.0f, 18000.0f);
+            cachedFilterActive = (cachedEnvCutoff < 17500.0f || resonance > 0.02f);
+            if (cachedFilterActive)
+            {
+                cachedSvfF = std::min(0.85f, 2.0f * fastSine(0.5f * cachedEnvCutoff * invSr));
+            }
+            filterMoves = false;
+        }
         // pitch static for the whole block: the glide has arrived (the original's glide step then keeps the note), no arpeggio
         // (arpSemi 0), no vibrato (0) and no sweep (pitchSweepSemitones * progress is a zero, Zap has its own drop). Adding a zero of
         // either sign to the note gives the same frequency, so the note of every sample is the one computed here.
@@ -772,26 +788,32 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
             float postCrush = held;
 
             // 9. State-Variable Lowpass Filter with envelope modulation
-            if (shareRead)
+            if (filterMoves)
             {
-                // a voice on the same envelope path computed this sample's coefficient (or filter off, -1) in this block's key
-                const float f = shareTab[i];
-                cachedFilterActive = (f >= 0.0f);
-                cachedSvfF = f;
-            }
-            else if (hasFilterEnv && env != cachedFilterEnvLevel)
-            {
-                cachedFilterEnvLevel = env;
-                cachedEnvCutoff = std::clamp(cutoffHz * fastPow2(filterEnvScale * env), 40.0f, 18000.0f);
-                cachedFilterActive = (cachedEnvCutoff < 17500.0f || resonance > 0.02f);
-                if (cachedFilterActive)
+                if (shareRead)
                 {
-                    cachedSvfF = std::min(0.85f, 2.0f * fastSine(0.5f * cachedEnvCutoff * invSr));
+                    // a voice on the same envelope path computed this sample's coefficient (or filter off, -1) for this block's key
+                    const float f = shareTab[i];
+                    cachedFilterActive = (f >= 0.0f);
+                    cachedSvfF = f;
                 }
-            }
-            if (shareTab && !shareRead)
-            {
-                shareTab[i] = cachedFilterActive ? cachedSvfF : -1.0f;
+                else
+                {
+                    if (env != cachedFilterEnvLevel)
+                    {
+                        cachedFilterEnvLevel = env;
+                        cachedEnvCutoff = std::clamp(cutoffHz * fastPow2(filterEnvScale * env), 40.0f, 18000.0f);
+                        cachedFilterActive = (cachedEnvCutoff < 17500.0f || resonance > 0.02f);
+                        if (cachedFilterActive)
+                        {
+                            cachedSvfF = std::min(0.85f, 2.0f * fastSine(0.5f * cachedEnvCutoff * invSr));
+                        }
+                    }
+                    if (shareTab)
+                    {
+                        shareTab[i] = cachedFilterActive ? cachedSvfF : -1.0f;
+                    }
+                }
             }
             if (cachedFilterActive)
             {
