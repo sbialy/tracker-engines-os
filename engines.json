@@ -244,7 +244,7 @@
    "stored": 6,
    "patch": 8,
    "type": 8,
-   "version": "1.0.0",
+   "version": "1.1.0",
    "logo": "CHIP",
    "visibility": "public",
    "licence": "Polyend CE",
@@ -253,7 +253,7 @@
    ],
    "notice": "polyend-chip",
    "wasm": false,
-   "defs": "-DFEATURE_SYNTH -DFEATURE_SYNTH_OPEN",
+   "defs": "-DFEATURE_SYNTH -DFEATURE_SYNTH_OPEN -DCHIP_WORK_POOL",
    "plg_licence": "Polyend CE",
    "zero_ctors": [
     "ChiptuneSynthVoice.cpp"

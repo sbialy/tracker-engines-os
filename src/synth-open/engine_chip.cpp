@@ -103,7 +103,18 @@ const MacroDef kMacros[] = {
     { "Filter Cutoff", true, 2, { { kFilterCutoff, 1.0f }, { kFilterResonance, 0.35f } } },
 };
 
-constexpr int kMaxVoiceObjects = ot::audio::kSynthSlots * kMaxVoicesPerInstrument; // 3 slots x the shim's voices per instrument
+#ifdef CHIP_WORK_POOL
+// The plugin: 12 voice objects in the bss (3 slots x the SDK's 4 voices, hot state in SRAM) and 4 more in the host's work memory (SDRAM,
+// PLUG_EXT_SYNTH work_bytes), so a CHIP pair on the Synth play page (8 + 8 voices) finds an object for every voice record. The 13th to 16th object
+// are taken only after the first 12 are in use, a single part never reaches them. Without work memory the pool stays at 12
+constexpr int kBssObjects = ot::audio::kSynthSlots * kMaxVoicesPerInstrument;
+constexpr int kWorkObjects = 4;
+constexpr int kMaxVoiceObjects = kBssObjects + kWorkObjects;
+constexpr uint32_t kWorkBytes = kWorkObjects * kChipVoiceBytes;
+#else
+constexpr int kBssObjects = ot::audio::kSynthSlots * kMaxVoicesPerInstrument; // 3 slots x the shim's voices per instrument
+constexpr int kMaxVoiceObjects = kBssObjects;
+#endif
 constexpr float kBlockBpm = 120.0f;
 
 class ChipEngine final : public ot::audio::ISynthEngine
@@ -189,7 +200,10 @@ class ChipEngine final : public ot::audio::ISynthEngine
     {
         Entry pool[kMaxVoiceObjects];
         uint32_t stampCounter;
-        alignas(8) unsigned char mem[kMaxVoiceObjects][kChipVoiceBytes];
+        alignas(8) unsigned char mem[kBssObjects][kChipVoiceBytes];
+#ifdef CHIP_WORK_POOL
+        unsigned char* work;   // the host's block (setWork), kWorkBytes
+#endif
         float bufL[kAudioBufferSize];
     };
 
@@ -197,12 +211,38 @@ class ChipEngine final : public ot::audio::ISynthEngine
     {
         if (!st.pool[0].voice)
         {
-            for (int i = 0; i < kMaxVoiceObjects; i++)
+            for (int i = 0; i < kBssObjects; i++)
             {
                 st.pool[i].voice = chipVoiceConstruct(st.mem[i]);
             }
         }
+#ifdef CHIP_WORK_POOL
+        // the objects of the work memory (given before the first audio call, after init): built once, the host zeroes the block at every attach
+        if (st.work && !st.pool[kBssObjects].voice)
+        {
+            for (int i = 0; i < kWorkObjects; i++)
+            {
+                st.pool[kBssObjects + i].voice = chipVoiceConstruct(st.work + i * kChipVoiceBytes);
+            }
+        }
+#endif
     }
+#ifdef CHIP_WORK_POOL
+  public:
+    void setWork(void* w, uint32_t bytes)
+    {
+        st.work = (w && bytes >= kWorkBytes) ? static_cast<unsigned char*>(w) : nullptr;
+        for (int i = kBssObjects; i < kMaxVoiceObjects; i++)   // a new block (attach): the old objects are gone
+        {
+            st.pool[i] = Entry{};
+        }
+        if (st.work && st.pool[0].voice)
+        {
+            createPool();
+        }
+    }
+  private:
+#endif
     // The entry of a shim voice record. At most 3 slots x kMaxVoicesPerInstrument voices are alive on the firmware, so a record always finds
     // its entry or a free one. After instruments were rebuilt (host tests) the oldest entry is reused.
     Entry* entryFor(const SynthVoice* key, bool allocate)
@@ -212,6 +252,10 @@ class ChipEngine final : public ot::audio::ISynthEngine
         Entry* oldest = nullptr;
         for (auto& e : st.pool)
         {
+            if (!e.voice)
+            {
+                continue;   // an object of the work memory the host did not give
+            }
             if (e.key == key)
             {
                 return &e;
@@ -269,6 +313,11 @@ ChipEngine gChip;
 ot::audio::ISynthEngine* chipEngine() { return &gChip; }
 
 } // namespace
+
+#ifdef CHIP_WORK_POOL
+uint32_t chipWorkBytes() { return kWorkBytes; }
+void chipSetWork(void* work, uint32_t bytes) { gChip.setWork(work, bytes); }
+#endif
 
 #ifdef OPEN_HOST_TEST
 // Host smoke test only (never defined in the plugin build). The entries are keyed by the address of a shim voice record. A host test that
