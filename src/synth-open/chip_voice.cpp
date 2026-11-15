@@ -471,6 +471,19 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
                          : 0.0f;
     }
 
+    // the filter update of the original loop for an envelope level: the cutoff, filter on or off (active) and, when on, the coefficient
+    // (returned, prev when off). One copy for the six loops: the plugin's image + bss must stay under the host's 33,792 B stage.
+    [[gnu::noinline]] static float filterCoef(float cutoffHz, float envScale, float env, float resonance, float invSr, float prev, bool& active)
+    {
+        const float cutoff = std::clamp(cutoffHz * fastPow2(envScale * env), 40.0f, 18000.0f);
+        active = (cutoff < 17500.0f || resonance > 0.02f);
+        if (active)
+        {
+            return std::min(0.85f, 2.0f * fastSine(0.5f * cutoff * invSr));
+        }
+        return prev;
+    }
+
     template <int kOsc>
     [[gnu::noinline]] float renderLoop(float* L, float* R, float g0, float gInc, const Blk& k)
     {
@@ -493,7 +506,6 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
         const float subMainGain = k.subMainGain, subOscGain = k.subOscGain, filterEnvScale = k.filterEnvScale;
         const bool hasFilterEnv = k.hasFilterEnv;
         float cachedFilterEnvLevel = -1.0f;
-        float cachedEnvCutoff = k.cachedEnvCutoff;
         bool cachedFilterActive = k.cachedFilterActive;
         float cachedSvfF = k.cachedSvfF;
         float drumDecay = k.drumDecay;
@@ -537,12 +549,7 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
         if (hasFilterEnv && stage == EnvStage::kSustain)
         {
             cachedFilterEnvLevel = sustainLevel;
-            cachedEnvCutoff = std::clamp(cutoffHz * fastPow2(filterEnvScale * sustainLevel), 40.0f, 18000.0f);
-            cachedFilterActive = (cachedEnvCutoff < 17500.0f || resonance > 0.02f);
-            if (cachedFilterActive)
-            {
-                cachedSvfF = std::min(0.85f, 2.0f * fastSine(0.5f * cachedEnvCutoff * invSr));
-            }
+            cachedSvfF = filterCoef(cutoffHz, filterEnvScale, sustainLevel, resonance, invSr, cachedSvfF, cachedFilterActive);
             filterMoves = false;
         }
         // pitch static for the whole block: the glide has arrived (the original's glide step then keeps the note), no arpeggio
@@ -802,12 +809,7 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
                     if (env != cachedFilterEnvLevel)
                     {
                         cachedFilterEnvLevel = env;
-                        cachedEnvCutoff = std::clamp(cutoffHz * fastPow2(filterEnvScale * env), 40.0f, 18000.0f);
-                        cachedFilterActive = (cachedEnvCutoff < 17500.0f || resonance > 0.02f);
-                        if (cachedFilterActive)
-                        {
-                            cachedSvfF = std::min(0.85f, 2.0f * fastSine(0.5f * cachedEnvCutoff * invSr));
-                        }
+                        cachedSvfF = filterCoef(cutoffHz, filterEnvScale, env, resonance, invSr, cachedSvfF, cachedFilterActive);
                     }
                     if (shareTab)
                     {
