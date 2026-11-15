@@ -279,185 +279,268 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
             std::fill(out.begin(), out.end(), 0.0f);
             return;
         }
+        // CHIP plugin: the per block constants of the original renderVoiceAudio (same expressions, same order), then one loop per
+        // oscillator kind with the voice state in locals (the four voice objects of the work memory sit in SDRAM, every member
+        // access of the original loop was an SDRAM access). The arithmetic of every sample is the original's, so the output is equal
+        // bit for bit.
+        Blk k;
+        prepareBlock(k);
+        switch (model)
+        {
+            case ChipModel::kPulse2A03:
+            case ChipModel::kArpChord:
+            case ChipModel::kZapLaser: renderLoop<kOscPulse>(out.data(), k); break;
+            case ChipModel::kSidSawTri: renderLoop<kOscSaw>(out.data(), k); break;
+            case ChipModel::kNoiseLfsr: renderLoop<kOscNoise>(out.data(), k); break;
+            case ChipModel::kFmBell: renderLoop<kOscFm>(out.data(), k); break;
+            case ChipModel::kSuperSquare: renderLoop<kOscSuper>(out.data(), k); break;
+            case ChipModel::kChipDrum: renderLoop<kOscDrum>(out.data(), k); break;
+        }
+    }
 
+  private:
+    enum OscKind : int
+    {
+        kOscPulse,
+        kOscSaw,
+        kOscNoise,
+        kOscFm,
+        kOscSuper,
+        kOscDrum,
+    };
+    struct Blk
+    {
+        float invSr, attackInc, decayDec, releaseDec, glideStep;
+        int effArpIdx;
+        uint32_t arpPeriodSamples;
+        float invSweepSamples, zapSweepScale;
+        bool crushActive;
+        float crushScale, invCrushScale;
+        int decimateFactor;
+        float qDamper, baseNoteOffset, pwmPhaseInc, vibPhaseInc, vibDepthSemi;
+        bool hasVibrato;
+        float baseDuty, pwmDutyScale, lfsrRateMult;
+        bool lfsrShortMode;
+        float fmRatio, fmModScale, superSquareMult2, superSquareMult3;
+        float drumDecay, drumSweepScale;
+        bool drumMetallicMode;
+        float drumSustainedNoiseMix;
+        bool hasSubMix;
+        float subMainGain, subOscGain, filterEnvScale;
+        bool hasFilterEnv;
+        float cachedEnvCutoff;
+        bool cachedFilterActive;
+        float cachedSvfF;
+    };
+
+    [[gnu::noinline]] void prepareBlock(Blk& k) const
+    {
         const float sr = sdk::kSampleRate;
         const float invSr = 1.0f / sr;
+        k.invSr = invSr;
 
         // Envelope increments per sample
-        const float attackInc =
-          (ampAttackSec > 0.001f) ? (1.0f / (ampAttackSec * sr)) : 1.0f;
-        const float decayDec =
-          (ampDecaySec > 0.002f) ? ((1.0f - ampSustainLevel) / (ampDecaySec * sr)) : 1.0f;
-        const float releaseDec =
-          (ampReleaseSec > 0.002f) ? (1.0f / (ampReleaseSec * sr)) : 1.0f;
+        k.attackInc = (ampAttackSec > 0.001f) ? (1.0f / (ampAttackSec * sr)) : 1.0f;
+        k.decayDec = (ampDecaySec > 0.002f) ? ((1.0f - ampSustainLevel) / (ampDecaySec * sr)) : 1.0f;
+        k.releaseDec = (ampReleaseSec > 0.002f) ? (1.0f / (ampReleaseSec * sr)) : 1.0f;
 
         // Portamento / glide coefficient
-        const float glideStep =
-          (glideTimeSec > 0.001f) ? (1.0f / (glideTimeSec * sr)) : 1.0f;
+        k.glideStep = (glideTimeSec > 0.001f) ? (1.0f / (glideTimeSec * sr)) : 1.0f;
 
         // Arpeggio step length in samples
-        const int effArpIdx =
-          (model == ChipModel::kArpChord && arpChordIdx == 0) ? 3 : arpChordIdx;
-        const uint32_t arpPeriodSamples =
-          std::max<uint32_t>(64u, static_cast<uint32_t>(sr / std::max(5.0f, arpSpeedHz)));
+        k.effArpIdx = (model == ChipModel::kArpChord && arpChordIdx == 0) ? 3 : arpChordIdx;
+        k.arpPeriodSamples = std::max<uint32_t>(64u, static_cast<uint32_t>(sr / std::max(5.0f, arpSpeedHz)));
 
         // Pitch sweep decay coefficient
         const float sweepSamples = std::max(64.0f, sweepTimeSec * sr);
-        const float invSweepSamples = 1.0f / sweepSamples;
-        const float zapSweepScale = 12.0f + 24.0f * shape;
+        k.invSweepSamples = 1.0f / sweepSamples;
+        k.zapSweepScale = 12.0f + 24.0f * shape;
 
         // Bitcrush quantization levels
-        const bool crushActive = (bitcrushBits < 15.5f);
-        const float crushScale = crushActive ? fastPow2(bitcrushBits - 1.0f) : 32768.0f;
-        const float invCrushScale = 1.0f / crushScale;
-        const int decimateFactor = std::clamp(static_cast<int>(decimateRate + 0.5f), 1, 32);
+        k.crushActive = (bitcrushBits < 15.5f);
+        k.crushScale = k.crushActive ? fastPow2(bitcrushBits - 1.0f) : 32768.0f;
+        k.invCrushScale = 1.0f / k.crushScale;
+        k.decimateFactor = std::clamp(static_cast<int>(decimateRate + 0.5f), 1, 32);
 
         // Chamberlin SVF resonance / damping
-        const float qDamper = std::clamp(1.0f - 0.85f * filterResonance, 0.12f, 1.0f);
+        k.qDamper = std::clamp(1.0f - 0.85f * filterResonance, 0.12f, 1.0f);
 
         // Per-block invariant oscillator / LFO / filter constants
-        const float baseNoteOffset = tuneSemitones + (fineCents * 0.01f) + pitchBendSemitones;
-        const float pwmPhaseInc = pwmRateHz * invSr;
-        const float vibPhaseInc = vibRateHz * invSr;
-        const float vibDepthSemi = vibDepth * 1.5f;
-        const bool hasVibrato = (vibDepth > 0.0f);
-        const float baseDuty = 0.125f + 0.75f * shape;
-        const float pwmDutyScale = 0.38f * pwmDepth;
-        const float lfsrRateMult = 2.0f + 14.0f * (1.0f - pwmDepth);
-        const bool lfsrShortMode = (shape >= 0.5f);
-        static constexpr std::array<float, 8> kFmRatios = {
-            1.0f, 2.0f, 3.0f, 3.5f, 4.0f, 5.0f, 7.0f, 9.0f
-        };
-        const float fmRatio = kFmRatios[std::clamp(static_cast<int>(shape * 7.99f), 0, 7)];
-        const float fmModScale = 0.4f + 3.5f * (0.35f + 0.65f * pwmDepth);
+        k.baseNoteOffset = tuneSemitones + (fineCents * 0.01f) + pitchBendSemitones;
+        k.pwmPhaseInc = pwmRateHz * invSr;
+        k.vibPhaseInc = vibRateHz * invSr;
+        k.vibDepthSemi = vibDepth * 1.5f;
+        k.hasVibrato = (vibDepth > 0.0f);
+        k.baseDuty = 0.125f + 0.75f * shape;
+        k.pwmDutyScale = 0.38f * pwmDepth;
+        k.lfsrRateMult = 2.0f + 14.0f * (1.0f - pwmDepth);
+        k.lfsrShortMode = (shape >= 0.5f);
+        static constexpr std::array<float, 8> kFmRatios = { 1.0f, 2.0f, 3.0f, 3.5f, 4.0f, 5.0f, 7.0f, 9.0f };
+        k.fmRatio = kFmRatios[std::clamp(static_cast<int>(shape * 7.99f), 0, 7)];
+        k.fmModScale = 0.4f + 3.5f * (0.35f + 0.65f * pwmDepth);
         const float superSquareSpread = 0.002f + 0.018f * shape;
-        const float superSquareMult2 = 1.0f + superSquareSpread;
-        const float superSquareMult3 = 1.0f - superSquareSpread;
+        k.superSquareMult2 = 1.0f + superSquareSpread;
+        k.superSquareMult3 = 1.0f - superSquareSpread;
 
         // ChipDrum exponential pitch envelope state (e^(-n / (0.08 * sr)))
+        k.drumDecay = (model == ChipModel::kChipDrum)
+                        ? fastPow2(-1.4426950f * static_cast<float>(noteAgeSamples) * (1.0f / (0.08f * sr)))
+                        : 0.0f;
+        k.drumSweepScale = 3.5f * (1.0f - shape * 0.7f);
+        k.drumMetallicMode = (shape > 0.75f);
+        k.drumSustainedNoiseMix = std::clamp(shape * 1.25f, 0.0f, 1.0f);
+
+        k.hasSubMix = (subMix > 0.001f);
+        k.subMainGain = 1.0f - 0.35f * subMix;
+        k.subOscGain = 0.75f * subMix;
+
+        k.filterEnvScale = filterEnvAmount * 4.0f;
+        k.hasFilterEnv = (std::abs(filterEnvAmount) > 0.0001f);
+        k.cachedEnvCutoff = std::clamp(filterCutoffHz, 40.0f, 18000.0f);
+        k.cachedFilterActive = (k.cachedEnvCutoff < 17500.0f || filterResonance > 0.02f);
+        k.cachedSvfF = (!k.hasFilterEnv && k.cachedFilterActive)
+                         ? std::min(0.85f, 2.0f * fastSine(0.5f * k.cachedEnvCutoff * invSr))
+                         : 0.0f;
+    }
+
+    template <int kOsc>
+    [[gnu::noinline]] void renderLoop(float* __restrict out, const Blk& k)
+    {
         static constexpr float kDrumDecayStep = 0.99971659f;
-        float drumDecay = (model == ChipModel::kChipDrum)
-                            ? fastPow2(-1.4426950f * static_cast<float>(noteAgeSamples) *
-                                       (1.0f / (0.08f * sr)))
-                            : 0.0f;
-        const float drumSweepScale = 3.5f * (1.0f - shape * 0.7f);
-        const bool drumMetallicMode = (shape > 0.75f);
-        const float drumSustainedNoiseMix = std::clamp(shape * 1.25f, 0.0f, 1.0f);
-
-        const bool hasSubMix = (subMix > 0.001f);
-        const float subMainGain = 1.0f - 0.35f * subMix;
-        const float subOscGain = 0.75f * subMix;
-
-        const float filterEnvScale = filterEnvAmount * 4.0f;
-        const bool hasFilterEnv = (std::abs(filterEnvAmount) > 0.0001f);
+        const float invSr = k.invSr;
+        const float attackInc = k.attackInc, decayDec = k.decayDec, releaseDec = k.releaseDec, glideStep = k.glideStep;
+        const int effArpIdx = k.effArpIdx;
+        const uint32_t arpPeriodSamples = k.arpPeriodSamples;
+        const float invSweepSamples = k.invSweepSamples, zapSweepScale = k.zapSweepScale;
+        const bool crushActive = k.crushActive;
+        const float crushScale = k.crushScale, invCrushScale = k.invCrushScale;
+        const int decimateFactor = k.decimateFactor;
+        const float qDamper = k.qDamper, baseNoteOffset = k.baseNoteOffset, pwmPhaseInc = k.pwmPhaseInc, vibPhaseInc = k.vibPhaseInc;
+        const float vibDepthSemi = k.vibDepthSemi;
+        const bool hasVibrato = k.hasVibrato;
+        const float baseDuty = k.baseDuty, pwmDutyScale = k.pwmDutyScale;
+        const bool hasSubMix = k.hasSubMix;
+        const float subMainGain = k.subMainGain, subOscGain = k.subOscGain, filterEnvScale = k.filterEnvScale;
+        const bool hasFilterEnv = k.hasFilterEnv;
         float cachedFilterEnvLevel = -1.0f;
-        float cachedEnvCutoff = std::clamp(filterCutoffHz, 40.0f, 18000.0f);
-        bool cachedFilterActive = (cachedEnvCutoff < 17500.0f || filterResonance > 0.02f);
-        float cachedSvfF =
-          (!hasFilterEnv && cachedFilterActive)
-            ? std::min(0.85f, 2.0f * fastSine(0.5f * cachedEnvCutoff * invSr))
-            : 0.0f;
+        float cachedEnvCutoff = k.cachedEnvCutoff;
+        bool cachedFilterActive = k.cachedFilterActive;
+        float cachedSvfF = k.cachedSvfF;
+        float drumDecay = k.drumDecay;
+        const float sustainLevel = ampSustainLevel;
+        const float cutoffHz = filterCutoffHz;
+        const float resonance = filterResonance;
+        const float sweepSemis = pitchSweepSemitones;
+        const bool isZap = (model == ChipModel::kZapLaser);
+        const float glideTarget = targetGlideNote;
 
-#ifdef FEATURE_SYNTH_OPEN
+        // the voice state, written back after the loop
+        EnvStage stage = envStage;
+        float env = envLevel;
+        float glideNote = currentGlideNote;
+        uint32_t arpCount = arpSampleCounter;
+        uint32_t arpStep = arpStepCounter;
+        float pwmPh = pwmPhase;
+        float vibPh = vibPhase;
+        float ph = phase;
+        float ph2 = osc2Phase;
+        float ph3 = osc3Phase;
+        float subPh = subPhase;
+        float lfsrPh = lfsrPhase;
+        uint16_t lfsr = lfsrState;
+        uint32_t age = noteAgeSamples;
+        int decCount = decimateCounter;
+        float held = heldSample;
+        float low = svfLow;
+        float band = svfBand;
+
         float freqNote = 0.0f;
         float freqHz = 0.0f;
         bool freqValid = false;
-#endif
 
-        for (size_t i = 0; i < out.size(); ++i)
+        for (int i = 0; i < kAudioBufferSize; ++i)
         {
             // 1. Update ADSR envelope
-            switch (envStage)
+            switch (stage)
             {
                 case EnvStage::kAttack:
-                    envLevel += attackInc;
-                    if (envLevel >= 1.0f)
+                    env += attackInc;
+                    if (env >= 1.0f)
                     {
-                        envLevel = 1.0f;
-                        envStage = EnvStage::kDecay;
+                        env = 1.0f;
+                        stage = EnvStage::kDecay;
                     }
                     break;
                 case EnvStage::kDecay:
-                    envLevel -= decayDec;
-                    if (envLevel <= ampSustainLevel)
+                    env -= decayDec;
+                    if (env <= sustainLevel)
                     {
-                        envLevel = ampSustainLevel;
-                        envStage = (ampSustainLevel <= 0.0001f) ? EnvStage::kIdle
-                                                                : EnvStage::kSustain;
+                        env = sustainLevel;
+                        stage = (sustainLevel <= 0.0001f) ? EnvStage::kIdle : EnvStage::kSustain;
                     }
                     break;
-                case EnvStage::kSustain:
-                    envLevel = ampSustainLevel;
-                    break;
+                case EnvStage::kSustain: env = sustainLevel; break;
                 case EnvStage::kRelease:
-                    envLevel -= releaseDec;
-                    if (envLevel <= 0.0001f)
+                    env -= releaseDec;
+                    if (env <= 0.0001f)
                     {
-                        envLevel = 0.0f;
-                        envStage = EnvStage::kIdle;
+                        env = 0.0f;
+                        stage = EnvStage::kIdle;
                     }
                     break;
-                case EnvStage::kIdle:
-                    out[i] = 0.0f;
-                    continue;
+                case EnvStage::kIdle: out[i] = 0.0f; continue;
             }
 
             // 2. Update glide
-            if (std::abs(currentGlideNote - targetGlideNote) > 0.001f)
+            if (std::abs(glideNote - glideTarget) > 0.001f)
             {
-                const float diff = targetGlideNote - currentGlideNote;
+                const float diff = glideTarget - glideNote;
                 const float step = std::min(std::abs(diff), glideStep * 24.0f);
-                currentGlideNote += (diff > 0.0f) ? step : -step;
+                glideNote += (diff > 0.0f) ? step : -step;
             }
             else
             {
-                currentGlideNote = targetGlideNote;
+                glideNote = glideTarget;
             }
 
             // 3. Update arpeggiator
             int8_t arpSemi = 0;
             if (effArpIdx > 0 && effArpIdx < 8)
             {
-                if (++arpSampleCounter >= arpPeriodSamples)
+                if (++arpCount >= arpPeriodSamples)
                 {
-                    arpSampleCounter = 0;
-                    arpStepCounter = (arpStepCounter + 1u) & 3u;
+                    arpCount = 0;
+                    arpStep = (arpStep + 1u) & 3u;
                 }
-                arpSemi = kArpChords[effArpIdx][arpStepCounter & 3u];
+                arpSemi = kArpChords[effArpIdx][arpStep & 3u];
             }
 
             // 4. Update LFOs (PWM & Vibrato)
-            pwmPhase += pwmPhaseInc;
-            if (pwmPhase >= 1.0f)
+            pwmPh += pwmPhaseInc;
+            if (pwmPh >= 1.0f)
             {
-                pwmPhase -= 1.0f;
+                pwmPh -= 1.0f;
             }
-            const float pwmLfo =
-              (pwmPhase < 0.5f) ? (pwmPhase * 4.0f - 1.0f) : (3.0f - pwmPhase * 4.0f);
+            const float pwmLfo = (pwmPh < 0.5f) ? (pwmPh * 4.0f - 1.0f) : (3.0f - pwmPh * 4.0f);
 
-            vibPhase += vibPhaseInc;
-            if (vibPhase >= 1.0f)
+            vibPh += vibPhaseInc;
+            if (vibPh >= 1.0f)
             {
-                vibPhase -= 1.0f;
+                vibPh -= 1.0f;
             }
-            const float vibSemitones = hasVibrato ? (fastSine(vibPhase) * vibDepthSemi) : 0.0f;
+            const float vibSemitones = hasVibrato ? (fastSine(vibPh) * vibDepthSemi) : 0.0f;
 
             // 5. Pitch sweep envelope
-            const float sweepProgress =
-              std::min(1.0f, static_cast<float>(noteAgeSamples) * invSweepSamples);
-            float activeSweepSemi = pitchSweepSemitones * sweepProgress;
-            if (model == ChipModel::kZapLaser)
+            const float sweepProgress = std::min(1.0f, static_cast<float>(age) * invSweepSamples);
+            float activeSweepSemi = sweepSemis * sweepProgress;
+            if (isZap)
             {
-                // Zap/Laser has built-in rapid downward pitch drop modulated by Shape
                 const float zapEnv = 1.0f - sweepProgress;
                 activeSweepSemi += zapSweepScale * (zapEnv * zapEnv * zapEnv - 1.0f);
             }
 
-            const float totalNote = currentGlideNote + baseNoteOffset +
-                                    static_cast<float>(arpSemi) + vibSemitones + activeSweepSemi;
-            // sdk::noteToFreq(0, totalNote), as note 0 is MIDI note 0
-#ifdef FEATURE_SYNTH_OPEN
-            // only when the note moves (a held note without vibrato, sweep or glide keeps it): same value, less work
+            const float totalNote =
+              glideNote + baseNoteOffset + static_cast<float>(arpSemi) + vibSemitones + activeSweepSemi;
             if (!freqValid || totalNote != freqNote)
             {
                 freqNote = totalNote;
@@ -465,10 +548,6 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
                 freqValid = true;
             }
             const float freq = freqHz;
-#else
-            const float freq =
-              std::clamp(8.1757989f * fastPow2(totalNote * (1.0f / 12.0f)), 16.0f, 18000.0f);
-#endif
             const float dt = freq * invSr;
 
             // Duty cycle with PWM modulation
@@ -476,153 +555,125 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
 
             // 6. Synthesize selected voice model
             float sig = 0.0f;
-            phase += dt;
+            ph += dt;
             bool wrapped = false;
-            if (phase >= 1.0f)
+            if (ph >= 1.0f)
             {
-                phase -= 1.0f;
+                ph -= 1.0f;
                 wrapped = true;
             }
 
-            switch (model)
+            if constexpr (kOsc == kOscPulse)
             {
-                case ChipModel::kPulse2A03:
-                case ChipModel::kArpChord:
-                case ChipModel::kZapLaser:
+                float pulse = (ph < duty) ? 1.0f : -1.0f;
+                pulse += polyBlep(ph, dt);
+                pulse -= polyBlep(wrapPhase(ph - duty + 1.0f), dt);
+                sig = pulse * 0.75f;
+            }
+            else if constexpr (kOsc == kOscSaw)
+            {
+                float saw = 2.0f * ph - 1.0f;
+                saw -= polyBlep(ph, dt);
+                const float tri = (ph < 0.5f) ? (ph * 4.0f - 1.0f) : (3.0f - ph * 4.0f);
+                const float ring = saw * ((subPh < 0.5f) ? 1.0f : -1.0f);
+                sig = ((1.0f - duty) * tri + duty * (0.65f * saw + 0.35f * ring)) * 0.8f;
+            }
+            else if constexpr (kOsc == kOscNoise)
+            {
+                lfsrPh += dt * k.lfsrRateMult;
+                while (lfsrPh >= 1.0f)
                 {
-                    float pulse = (phase < duty) ? 1.0f : -1.0f;
-                    pulse += polyBlep(phase, dt);
-                    pulse -= polyBlep(wrapPhase(phase - duty + 1.0f), dt);
-                    sig = pulse * 0.75f;
-                    break;
+                    lfsrPh -= 1.0f;
+                    lfsr = stepLfsr(lfsr, k.lfsrShortMode);
                 }
-
-                case ChipModel::kSidSawTri:
+                sig = ((lfsr & 1u) != 0u ? 0.8f : -0.8f);
+            }
+            else if constexpr (kOsc == kOscFm)
+            {
+                const float modDt = dt * k.fmRatio;
+                ph2 += modDt;
+                if (ph2 >= 1.0f)
                 {
-                    float saw = 2.0f * phase - 1.0f;
-                    saw -= polyBlep(phase, dt);
-                    const float tri =
-                      (phase < 0.5f) ? (phase * 4.0f - 1.0f) : (3.0f - phase * 4.0f);
-                    // Ring-mod & waveform blend controlled by duty/shape
-                    const float ring = saw * ((subPhase < 0.5f) ? 1.0f : -1.0f);
-                    sig = ((1.0f - duty) * tri + duty * (0.65f * saw + 0.35f * ring)) * 0.8f;
-                    break;
+                    ph2 -= floorOf(ph2);
                 }
-
-                case ChipModel::kNoiseLfsr:
+                const float modIndex = k.fmModScale * env;
+                const float modSig = fastSine(ph2 + 0.15f * pwmLfo);
+                const float rawCarrier = fastSine(ph + modIndex * modSig * 0.5f);
+                sig = roundOf(rawCarrier * 31.0f) * (0.85f / 31.0f);
+            }
+            else if constexpr (kOsc == kOscSuper)
+            {
+                const float dt2 = dt * k.superSquareMult2;
+                const float dt3 = dt * k.superSquareMult3;
+                ph2 += dt2;
+                if (ph2 >= 1.0f)
                 {
-                    // Clock LFSR at pitch-tracked rate
-                    lfsrPhase += dt * lfsrRateMult;
-                    while (lfsrPhase >= 1.0f)
-                    {
-                        lfsrPhase -= 1.0f;
-                        lfsrState = stepLfsr(lfsrState, lfsrShortMode);
-                    }
-                    sig = ((lfsrState & 1u) != 0u ? 0.8f : -0.8f);
-                    break;
+                    ph2 -= 1.0f;
                 }
-
-                case ChipModel::kFmBell:
+                ph3 += dt3;
+                if (ph3 >= 1.0f)
                 {
-                    // 2-op OPL chiptune FM: integer/bell ratios selected by Shape
-                    const float modDt = dt * fmRatio;
-                    osc2Phase += modDt;
-                    if (osc2Phase >= 1.0f)
-                    {
-                        osc2Phase -= floorOf(osc2Phase);
-                    }
-                    const float modIndex = fmModScale * envLevel;
-                    const float modSig = fastSine(osc2Phase + 0.15f * pwmLfo);
-                    // Quantize FM carrier to 6-bit OPL DAC character
-                    const float rawCarrier = fastSine(phase + modIndex * modSig * 0.5f);
-                    sig = roundOf(rawCarrier * 31.0f) * (0.85f / 31.0f);
-                    break;
+                    ph3 -= 1.0f;
                 }
-
-                case ChipModel::kSuperSquare:
+                float p1 = (ph < duty) ? 1.0f : -1.0f;
+                p1 += polyBlep(ph, dt) - polyBlep(wrapPhase(ph - duty + 1.0f), dt);
+                float p2 = (ph2 < duty) ? 1.0f : -1.0f;
+                p2 += polyBlep(ph2, dt2) - polyBlep(wrapPhase(ph2 - duty + 1.0f), dt2);
+                float p3 = (ph3 < duty) ? 1.0f : -1.0f;
+                p3 += polyBlep(ph3, dt3) - polyBlep(wrapPhase(ph3 - duty + 1.0f), dt3);
+                sig = (p1 + 0.8f * p2 + 0.8f * p3) * 0.34f;
+            }
+            else
+            {
+                const float drumFreq = freq * (1.0f + k.drumSweepScale * drumDecay * drumDecay);
+                drumDecay *= kDrumDecayStep;
+                ph2 += drumFreq * invSr;
+                if (ph2 >= 1.0f)
                 {
-                    // 3 detuned pulse oscillators
-                    const float dt2 = dt * superSquareMult2;
-                    const float dt3 = dt * superSquareMult3;
-                    osc2Phase += dt2;
-                    if (osc2Phase >= 1.0f)
-                    {
-                        osc2Phase -= 1.0f;
-                    }
-                    osc3Phase += dt3;
-                    if (osc3Phase >= 1.0f)
-                    {
-                        osc3Phase -= 1.0f;
-                    }
-                    float p1 = (phase < duty) ? 1.0f : -1.0f;
-                    p1 += polyBlep(phase, dt) -
-                          polyBlep(wrapPhase(phase - duty + 1.0f), dt);
-                    float p2 = (osc2Phase < duty) ? 1.0f : -1.0f;
-                    p2 += polyBlep(osc2Phase, dt2) -
-                          polyBlep(wrapPhase(osc2Phase - duty + 1.0f), dt2);
-                    float p3 = (osc3Phase < duty) ? 1.0f : -1.0f;
-                    p3 += polyBlep(osc3Phase, dt3) -
-                          polyBlep(wrapPhase(osc3Phase - duty + 1.0f), dt3);
-                    sig = (p1 + 0.8f * p2 + 0.8f * p3) * 0.34f;
-                    break;
+                    ph2 -= floorOf(ph2);
                 }
-
-                case ChipModel::kChipDrum:
+                if (wrapped || (age & 1u) == 0u)
                 {
-                    // Morphs from Kick (0..0.33) -> Snare (0.33..0.67) -> Metallic Hat (0.67..1.0)
-                    const float drumFreq =
-                      freq * (1.0f + drumSweepScale * drumDecay * drumDecay);
-                    drumDecay *= kDrumDecayStep;
-                    osc2Phase += drumFreq * invSr;
-                    if (osc2Phase >= 1.0f)
-                    {
-                        osc2Phase -= floorOf(osc2Phase);
-                    }
-                    if (wrapped || (noteAgeSamples & 1u) == 0u)
-                    {
-                        lfsrState = stepLfsr(lfsrState, drumMetallicMode);
-                    }
-                    const float body = nesSteppedTriangle(osc2Phase);
-                    const float noise = ((lfsrState & 1u) != 0u) ? 0.85f : -0.85f;
-                    const float noiseMix = (noteAgeSamples < 180u) ? 0.7f : drumSustainedNoiseMix;
-                    sig = (1.0f - noiseMix) * body + noiseMix * noise;
-                    break;
+                    lfsr = stepLfsr(lfsr, k.drumMetallicMode);
                 }
+                const float body = nesSteppedTriangle(ph2);
+                const float noise = ((lfsr & 1u) != 0u) ? 0.85f : -0.85f;
+                const float noiseMix = (age < 180u) ? 0.7f : k.drumSustainedNoiseMix;
+                sig = (1.0f - noiseMix) * body + noiseMix * noise;
             }
 
             // 7. Add 4-bit stepped NES Sub-Oscillator (-1 octave)
-            subPhase += dt * 0.5f;
-            if (subPhase >= 1.0f)
+            subPh += dt * 0.5f;
+            if (subPh >= 1.0f)
             {
-                subPhase -= 1.0f;
+                subPh -= 1.0f;
             }
             if (hasSubMix)
             {
-                sig = sig * subMainGain + nesSteppedTriangle(subPhase) * subOscGain;
+                sig = sig * subMainGain + nesSteppedTriangle(subPh) * subOscGain;
             }
 
             // 8. Sample-rate decimation & bitcrusher
-            if (++decimateCounter >= decimateFactor)
+            if (++decCount >= decimateFactor)
             {
-                decimateCounter = 0;
+                decCount = 0;
                 if (crushActive)
                 {
-                    heldSample = roundOf(sig * crushScale) * invCrushScale;
+                    held = roundOf(sig * crushScale) * invCrushScale;
                 }
                 else
                 {
-                    heldSample = sig;
+                    held = sig;
                 }
             }
-            float postCrush = heldSample;
+            float postCrush = held;
 
             // 9. State-Variable Lowpass Filter with envelope modulation
-            if (hasFilterEnv && envLevel != cachedFilterEnvLevel)
+            if (hasFilterEnv && env != cachedFilterEnvLevel)
             {
-                cachedFilterEnvLevel = envLevel;
-                cachedEnvCutoff = std::clamp(
-                  filterCutoffHz * fastPow2(filterEnvScale * envLevel), 40.0f, 18000.0f);
-                cachedFilterActive = (cachedEnvCutoff < 17500.0f || filterResonance > 0.02f);
+                cachedFilterEnvLevel = env;
+                cachedEnvCutoff = std::clamp(cutoffHz * fastPow2(filterEnvScale * env), 40.0f, 18000.0f);
+                cachedFilterActive = (cachedEnvCutoff < 17500.0f || resonance > 0.02f);
                 if (cachedFilterActive)
                 {
                     cachedSvfF = std::min(0.85f, 2.0f * fastSine(0.5f * cachedEnvCutoff * invSr));
@@ -630,18 +681,39 @@ class ChiptuneSynthVoice : public sdk::CustomSynthVoice<ChiptuneSynthVoice, Chip
             }
             if (cachedFilterActive)
             {
-                svfLow += cachedSvfF * svfBand;
-                const float high = postCrush - svfLow - qDamper * svfBand;
-                svfBand += cachedSvfF * high;
-                svfBand = std::clamp(svfBand, -2.0f, 2.0f);
-                svfLow = std::clamp(svfLow, -2.0f, 2.0f);
-                postCrush = svfLow;
+                low += cachedSvfF * band;
+                const float high = postCrush - low - qDamper * band;
+                band += cachedSvfF * high;
+                band = std::clamp(band, -2.0f, 2.0f);
+                low = std::clamp(low, -2.0f, 2.0f);
+                postCrush = low;
             }
 
-            out[i] = postCrush * envLevel * volumeMult;
-            ++noteAgeSamples;
+            out[i] = postCrush * env * volumeMult;
+            ++age;
         }
+
+        envStage = stage;
+        envLevel = env;
+        currentGlideNote = glideNote;
+        arpSampleCounter = arpCount;
+        arpStepCounter = arpStep;
+        pwmPhase = pwmPh;
+        vibPhase = vibPh;
+        phase = ph;
+        osc2Phase = ph2;
+        osc3Phase = ph3;
+        subPhase = subPh;
+        lfsrPhase = lfsrPh;
+        lfsrState = lfsr;
+        noteAgeSamples = age;
+        decimateCounter = decCount;
+        heldSample = held;
+        svfLow = low;
+        svfBand = band;
     }
+
+  public:
 
     static void createMetadata(const Patch& /*patch*/, Patch::Metadata& metadata)
     {
