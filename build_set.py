@@ -239,7 +239,8 @@ def build(a):
                 "flags": engine_opt(e, fl) + (" " + e["extra"] if e["extra"] else ""),
                 "abi": "%d.%d" % (h["abi_major"], h["abi_minor"]), "min_host": h["min_host"], "image_size": h["image_size"],
                 "bss_size": h["bss_size"], "rw_offset": h["rw_offset"], "rebase_words": h["rebase_count"], "file_size": h["file_size"],
-                "crc32": "0x%08x" % h["crc32"], "sha256": sha256(plg), "render_checksums": emu})
+                "crc32": "0x%08x" % h["crc32"], "sha256": sha256(plg), "render_checksums": emu,
+                **({"min_firmware": e["min_firmware"]} if "min_firmware" in e else {})})
         run([sys.executable, "-I", os.path.join(so, "tools", "plgi_sheet.py"), "-o", os.path.join(out, "previews", "sheet.png")] +
             [os.path.join(out, "previews", e["id"] + ".png") for e in engines])
         gcc = run([tc + "gcc", "--version"]).splitlines()[0]

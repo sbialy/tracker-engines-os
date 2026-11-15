@@ -1,5 +1,5 @@
 {
- "_comment": "The public synth engine .plg set of tracker-engines-os: one row per engine. Sources are relative to src/synth-open/ (their tracker-ff path synth-open/). opt: engines = the flavour's OpenTracker module flags, o3 = the flavour's FM4 / B-Type flags, anything else = literal flags. extra = more flags of the DSP source only. name = the descriptor name (-DSYNTH_ENGINE_<name>). stored, patch, type = the numbers of the engine (plug_abi.h PLUG_SYNTH_MANIFEST), they must equal the row of the same id in tracker-ff engines/engines.json (tracker-ff engines/crosscheck.sh and build_set.py verify-external check the built files against it). version = the .plg header version, bump it when that engine's bytes change on purpose. licence, licence_files, notice: what ships next to the .wasm (notices = the texts).",
+ "_comment": "The public synth engine .plg set of tracker-engines-os: one row per engine. Sources are relative to src/synth-open/ (their tracker-ff path synth-open/). opt: engines = the flavour's OpenTracker module flags, o3 = the flavour's FM4 / B-Type flags, anything else = literal flags. extra = more flags of the DSP source only. name = the descriptor name (-DSYNTH_ENGINE_<name>). stored, patch, type = the numbers of the engine (plug_abi.h PLUG_SYNTH_MANIFEST), they must equal the row of the same id in tracker-ff engines/engines.json (tracker-ff engines/crosscheck.sh and build_set.py verify-external check the built files against it). version = the .plg header version, bump it when that engine's bytes change on purpose. licence, licence_files, notice: what ships next to the .wasm (notices = the texts). min_firmware = the lowest tracker-ff firmware that installs the plugin, only where it is above the set default (JU6 1.1.0: the 68 name Chord enum needs the 128 name cap of 1.3.0, a 1.2.x firmware refuses the file and the slot reads Missing), copied into SET.json.",
  "set_version": "1.0.0",
  "default_flavour": "autof",
  "flavours": {
@@ -29,6 +29,7 @@
    "patch": 129,
    "type": 129,
    "version": "1.1.0",
+   "min_firmware": "1.3.0",
    "logo": "JU6",
    "visibility": "public",
    "licence": "MIT",
