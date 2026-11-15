@@ -1,5 +1,10 @@
 // Copied from opentracker-synths (https://github.com/opentracker-fw/opentracker-synths, modules/cstype/src/cstype.cpp, commit eb150a5f741b),
-// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Not modified, except this notice.
+// Copyright (c) 2026 Marcin Spoczynski, MIT licence, see licenses/LICENSE-OpenTracker-synths-MIT.txt. Modified by tracker-ff for CPU on
+// the MK66 (cstype-cpu, 2026-11-15): the per-chunk passes are specialised per wave set and output target (no per-frame flag tests, no sum
+// buffer clear and no extra output pass with the ring modulator off), the common layer runs oscillator and filters in one loop, local
+// copies of fastExp2 / incOf / svfG without a memcpy call. The output is bit identical to the original. Lossy switches, all off by
+// default: CSTYPE_CR (control-rate filter coefficients), CSTYPE_HNEXT (no h jump check, unsafe: NaN at all-max), CSTYPE_TAIL (voice end
+// threshold). The DSP itself is unchanged.
 // CS-Type two-layer engine (see cstype.h).
 //
 // Per voice two layers, each two passes per 64-frame chunk: the
@@ -57,6 +62,25 @@ constexpr float kVibHz = 5.5f;          // the Touch vibrato's rate
 constexpr float kRmSweepOct = 3.0f;     // RM Sweep 100 % = the ring's rate starts 3 octaves off
 constexpr float kHpOffHz = 20.5f;       // HPF at its bottom (20 Hz): off
 constexpr float kHpKMin = 0.1f;         // HPF: 2 x damping at least (a +20 dB peak at the top)
+// CPU round (cstype-cpu) switches. CSTYPE_CR: the filters' coefficients
+// (the LPF's level-k and h, the HPF's g, k and h) at control rate, every
+// CSTYPE_CR frames (1 = per frame, the original sound).
+#ifndef CSTYPE_CR
+#define CSTYPE_CR 1
+#endif
+constexpr int kCr = CSTYPE_CR;
+// CSTYPE_HNEXT 1: the LPF's h follows its g and k by the plain Newton step
+// (va::svfHNext) without svfHTrack's check for a jump (0: svfHTrack).
+#ifndef CSTYPE_HNEXT
+#define CSTYPE_HNEXT 0
+#endif
+// CSTYPE_TAIL > 0: the VCA envelope ends a voice once its release, or a
+// decay to Sustain 0, falls under CSTYPE_TAIL (e.g. 1e-3f = -60 dB) instead
+// of 1e-4 (release) / 1e-5 (decay). 0: the original ends.
+#ifndef CSTYPE_TAIL
+#define CSTYPE_TAIL 0
+#endif
+static_assert(kCr == 1 || kCr == 2 || kCr == 4 || kCr == 8 || kCr == 16, "CSTYPE_CR: a power of two up to 16");
 constexpr int kChunk = 64;              // frames per pass: two kChunk buffers on the stack (512 B)
 
 struct Layer {
@@ -120,9 +144,29 @@ struct LayerRamp {
 // without colouring it at normal levels.
 inline float limit(float y) {
     const float a = __builtin_fabsf(y);
-    if (a <= 1.0f) return y;
+    if (__builtin_expect(a <= 1.0f, 1)) return y;   // (the knee out of the filter loop's straight path)
     const float t = a - 1.0f, o = 1.0f + t / (1.0f + t);
     return y < 0.0f ? -o : o;
+}
+inline float hTrack(float h, float g, float k) { return CSTYPE_HNEXT ? svfHNext(h, g, k) : svfHTrack(h, g, k); }
+// va::step (the VCA's ADSR) with the tail end of CSTYPE_TAIL.
+inline float stepVca(uint8_t& st, float e, const Contour& c) {
+    if (CSTYPE_TAIL > 0) {
+        if (st == kRel) {
+            e *= c.relC;
+            if (e < float(CSTYPE_TAIL)) {
+                e = 0.0f;
+                st = kIdle;
+            }
+            return e;
+        }
+        if (st == kDec && c.sustain == 0.0f) {
+            e = e * c.decC;
+            if (e < float(CSTYPE_TAIL)) e = 0.0f;
+            return e;
+        }
+    }
+    return step(st, e, c);
 }
 // The layer's sine (a cosine: the phase is free) from the triangle of the
 // phase, sin(pi / 2 t) to 1e-4.
@@ -137,24 +181,60 @@ inline float parabola(float p) {
     return 8.0f * u * (1.0f - 2.0f * __builtin_fabsf(u));
 }
 
+// va::fastExp2, incOf and svfG with the bit cast spelled __builtin_memcpy:
+// the plugin flags have -fno-builtin, so std::memcpy there is a library
+// call per use (four or more per layer and block). The same values.
+inline float exp2v(float x) {
+    x = clampf(x, -60.0f, 60.0f);
+    const int i = int(x + (x >= 0.0f ? 0.5f : -0.5f));
+    const float f = x - float(i);
+    const float p = 1.0f + f * (0.693147181f + f * (0.240226507f + f * (0.0555041087f + f * (0.00961812911f + f * 0.00133335581f))));
+    const uint32_t b = uint32_t(i + 127) << 23;
+    float s;
+    __builtin_memcpy(&s, &b, 4);
+    return p * s;
+}
+inline float incOfV(float note, float semi, float maxDt) {
+    return clampf(440.0f * kInvFs * exp2v((note + semi + 0.01f * 0.0f - 69.0f) * (1.0f / 12.0f)), 1.0e-7f, maxDt);
+}
+inline float svfGV(float cutoff, float oct) { return tanPade(kPi * clampf(cutoff * exp2v(oct), 8.0f, 0.45f * kSampleRate) * kInvFs); }
+
+// vcoSawPulse with the pulse off (gp = 0): only the saw's wrap has a step.
+// The same values as vcoSawPulse(.., gs, 0) (its pulse terms are all zero).
+inline float vcoSaw(float& p, float& z, float d, float gs) {
+    const float e = p + d;
+    float out = z, cur = 0.0f;
+    if (__builtin_expect(e >= 1.0f, 0)) {   // (once a cycle: off the straight path)
+        p = e - 1.0f;
+        stepResidual(-2.0f * gs, p / d, out, cur);
+    } else {
+        p = e;
+    }
+    z = cur + gs * (p + p - 1.0f);
+    return out;
+}
+
 // One chunk of a layer's oscillators into o: saw + pulse, the sine and the
-// noise only when their levels are up.
-__attribute__((noinline)) void oscPass(float* o, LayerV& V, uint32_t& nz, LayerRamp& q, bool sine, bool noise) {
+// noise only when their levels are up. CPU round (cstype-cpu): one variant
+// per wave set, so the per-frame flag tests and, with the pulse off, the
+// pulse's edge and level terms (all zero) are gone. The same output.
+template <bool kPulse, bool kSine, bool kNoise>
+__attribute__((noinline)) void oscPass(float* __restrict o, LayerV& V, uint32_t& nz, LayerRamp& q) {
     float p = V.ph, z = V.z;
     float dt = q.dt.v, du = q.du.v, si = q.sine.v, no = q.noise.v;
-    bool high = p >= 1.0f - du;   // the pulse's state, carried while the width moves
+    bool high = kPulse && p >= 1.0f - du;   // the pulse's state, carried while the width moves
     const float ddt = q.dt.d, ddu = q.du.d, dsi = q.sine.d, dno = q.noise.d;
     const float gs = q.gs, gp = q.gp;
     uint32_t n = nz;
     for (int i = 0; i < kChunk; ++i) {
-        float s = vcoSawPulse(p, z, high, dt, du, gs, gp);
-        if (sine) s += si * cosOf(p);
-        if (noise) s += no * lcg(n);
+        float s = kPulse ? vcoSawPulse(p, z, high, dt, du, gs, gp) : vcoSaw(p, z, dt, gs);
+        if (kSine) s += si * cosOf(p);
+        if (kNoise) s += no * lcg(n);
         o[i] = s;
         dt += ddt;
-        du += ddu;
-        si += dsi;
-        no += dno;
+        if (kPulse) du += ddu;
+        if (kSine) si += dsi;
+        if (kNoise) no += dno;
     }
     nz = n;
     V.ph = p;
@@ -164,30 +244,85 @@ __attribute__((noinline)) void oscPass(float* o, LayerV& V, uint32_t& nz, LayerR
     q.sine.v = si;
     q.noise.v = no;
 }
-// One chunk of a layer's filters, limit and VCA from o added into x. kHp:
-// the high-pass runs.
-template <bool kHp>
-__attribute__((noinline)) void filterPass(const float* o, float* x, LayerV& V, LayerRamp& q) {
+using OscFn = void (*)(float*, LayerV&, uint32_t&, LayerRamp&);
+// Where a layer's chunk goes (ring off: straight into L / R, no sum buffer
+// to clear, no extra pass): x = y, x += y, L / R += x + y, L / R += y.
+enum Out : int { kStore = 0, kAdd, kAddOut, kOutOnly };
+// One chunk of a layer's filters, limit and VCA from o into x / L / R (kO).
+// kHp: the high-pass runs.
+template <bool kHp, int kO>
+__attribute__((noinline)) void filterPass(const float* __restrict o, float* __restrict x, float* __restrict Lo, float* __restrict Ro,
+                                          LayerV& V, LayerRamp& q) {
     Svf h = V.hp, l = V.lp;
     float A = q.a.v, hg = q.hg.v, hh = q.hh, hk = q.hk.v, lg = q.lg.v, lh = q.lh, lk = q.lk.v;
-    const float dA = q.a.d, dhg = q.hg.d, dhk = q.hk.d, dlg = q.lg.d, dlk = q.lk.d;
-    for (int i = 0; i < kChunk; ++i) {
-        float s = o[i];
-        float lp, bp, hp;
-        if (kHp) {
-            svfStep(h, SvfCoef{hg, hk, hh}, s, lp, bp, hp);
-            s = hp;
-            hg += dhg;
-            hk += dhk;
-            hh = svfHNext(hh, hg, hk);
+    const float dA = q.a.d, dhg = q.hg.d, dhk = q.hk.d, dlg = q.lg.d, dlk = q.lk.d, lkMin = q.lkMin;
+    if constexpr (kCr == 1) {
+        for (int i = 0; i < kChunk; ++i) {
+            float s = o[i];
+            float lp, bp, hp;
+            if (kHp) {
+                svfStep(h, SvfCoef{hg, hk, hh}, s, lp, bp, hp);
+                s = hp;
+                hg += dhg;
+                hk += dhk;
+                hh = svfHNext(hh, hg, hk);
+            }
+            const float kk = svfLevelK(lk, lkMin, l);   // + the state's level: singing, bounded
+            lh = hTrack(lh, lg, kk);
+            svfStep(l, SvfCoef{lg, kk, lh}, s, lp, bp, hp);
+            const float y = limit(lp) * A;
+            if (kO == kStore) x[i] = y;
+            else if (kO == kAdd) x[i] += y;
+            else {
+                const float v = kO == kAddOut ? x[i] + y : y;
+                Lo[i] += v;
+                Ro[i] += v;
+            }
+            A += dA;
+            lg += dlg;
+            lk += dlk;
         }
-        const float kk = svfLevelK(lk, q.lkMin, l);   // + the state's level: singing, bounded
-        lh = svfHTrack(lh, lg, kk);
-        svfStep(l, SvfCoef{lg, kk, lh}, s, lp, bp, hp);
-        x[i] += limit(lp) * A;
-        A += dA;
-        lg += dlg;
-        lk += dlk;
+    } else
+    for (int i0 = 0; i0 < kChunk; i0 += kCr) {
+        // kCr > 1 (CSTYPE_CR): the filters' coefficients at control rate, set at the group's first frame and held
+        float kk = 0.0f;
+        const float gL = lg, gH = hg, kH = hk, hH = hh;
+        if (kCr > 1) {
+            kk = svfLevelK(lk, lkMin, l);
+            lh = hTrack(lh, lg, kk);
+        }
+        for (int u = 0; u < kCr; ++u) {
+            const int i = i0 + u;
+            float s = o[i];
+            float lp, bp, hp;
+            if (kHp) {
+                if (kCr > 1) svfStep(h, SvfCoef{gH, kH, hH}, s, lp, bp, hp);
+                else svfStep(h, SvfCoef{hg, hk, hh}, s, lp, bp, hp);
+                s = hp;
+                hg += dhg;
+                hk += dhk;
+                if (kCr == 1) hh = svfHNext(hh, hg, hk);
+            }
+            if (kCr == 1) {
+                kk = svfLevelK(lk, lkMin, l);   // + the state's level: singing, bounded
+                lh = hTrack(lh, lg, kk);
+                svfStep(l, SvfCoef{lg, kk, lh}, s, lp, bp, hp);
+            } else {
+                svfStep(l, SvfCoef{gL, kk, lh}, s, lp, bp, hp);
+            }
+            const float y = limit(lp) * A;
+            if (kO == kStore) x[i] = y;
+            else if (kO == kAdd) x[i] += y;
+            else {
+                const float v = kO == kAddOut ? x[i] + y : y;
+                Lo[i] += v;
+                Ro[i] += v;
+            }
+            A += dA;
+            lg += dlg;
+            lk += dlk;
+        }
+        if (kHp && kCr > 1) hh = svfHNext(hh, hg, hk);
     }
     V.hp = h;
     V.lp = l;
@@ -199,6 +334,94 @@ __attribute__((noinline)) void filterPass(const float* o, float* x, LayerV& V, L
     q.lh = lh;
     q.lk.v = lk;
 }
+// oscPass + filterPass<false, kO> in one loop for the common layer (saw and
+// / or pulse, no sine, no noise, high-pass off): no oscillator buffer, one
+// loop. The same arithmetic in the same order, so the same output.
+template <bool kPulse, int kO>
+__attribute__((noinline)) void fusedPass(float* __restrict x, float* __restrict Lo, float* __restrict Ro, LayerV& V, LayerRamp& q) {
+    float p = V.ph, z = V.z;
+    float dt = q.dt.v, du = q.du.v;
+    bool high = kPulse && p >= 1.0f - du;
+    const float ddt = q.dt.d, ddu = q.du.d, gs = q.gs, gp = q.gp;
+    Svf l = V.lp;
+    float A = q.a.v, lg = q.lg.v, lh = q.lh, lk = q.lk.v;
+    const float dA = q.a.d, dlg = q.lg.d, dlk = q.lk.d, lkMin = q.lkMin;
+    if constexpr (kCr == 1) {
+        for (int i = 0; i < kChunk; ++i) {
+            const float s = kPulse ? vcoSawPulse(p, z, high, dt, du, gs, gp) : vcoSaw(p, z, dt, gs);
+            dt += ddt;
+            if (kPulse) du += ddu;
+            float lp, bp, hp;
+            const float kk = svfLevelK(lk, lkMin, l);
+            lh = hTrack(lh, lg, kk);
+            svfStep(l, SvfCoef{lg, kk, lh}, s, lp, bp, hp);
+            const float y = limit(lp) * A;
+            if (kO == kStore) x[i] = y;
+            else if (kO == kAdd) x[i] += y;
+            else {
+                const float v = kO == kAddOut ? x[i] + y : y;
+                Lo[i] += v;
+                Ro[i] += v;
+            }
+            A += dA;
+            lg += dlg;
+            lk += dlk;
+        }
+    } else
+    for (int i0 = 0; i0 < kChunk; i0 += kCr) {
+        float kk = 0.0f;
+        const float gL = lg;
+        if (kCr > 1) {
+            kk = svfLevelK(lk, lkMin, l);
+            lh = hTrack(lh, lg, kk);
+        }
+        for (int u = 0; u < kCr; ++u) {
+            const int i = i0 + u;
+            const float s = kPulse ? vcoSawPulse(p, z, high, dt, du, gs, gp) : vcoSaw(p, z, dt, gs);
+            dt += ddt;
+            if (kPulse) du += ddu;
+            float lp, bp, hp;
+            if (kCr == 1) {
+                kk = svfLevelK(lk, lkMin, l);
+                lh = hTrack(lh, lg, kk);
+                svfStep(l, SvfCoef{lg, kk, lh}, s, lp, bp, hp);
+            } else {
+                svfStep(l, SvfCoef{gL, kk, lh}, s, lp, bp, hp);
+            }
+            const float y = limit(lp) * A;
+            if (kO == kStore) x[i] = y;
+            else if (kO == kAdd) x[i] += y;
+            else {
+                const float v = kO == kAddOut ? x[i] + y : y;
+                Lo[i] += v;
+                Ro[i] += v;
+            }
+            A += dA;
+            lg += dlg;
+            lk += dlk;
+        }
+    }
+    V.ph = p;
+    V.z = z;
+    q.dt.v = dt;
+    q.du.v = du;
+    V.lp = l;
+    q.a.v = A;
+    q.lg.v = lg;
+    q.lh = lh;
+    q.lk.v = lk;
+}
+using FusedFn = void (*)(float*, float*, float*, LayerV&, LayerRamp&);
+constexpr FusedFn kFusedFns[2][4] = {
+    {fusedPass<false, kStore>, fusedPass<false, kAdd>, fusedPass<false, kAddOut>, fusedPass<false, kOutOnly>},
+    {fusedPass<true, kStore>, fusedPass<true, kAdd>, fusedPass<true, kAddOut>, fusedPass<true, kOutOnly>}};
+using FilterFn = void (*)(const float*, float*, float*, float*, LayerV&, LayerRamp&);
+constexpr OscFn kOscFns[8] = {oscPass<false, false, false>, oscPass<false, false, true>, oscPass<false, true, false>,
+                              oscPass<false, true, true>,   oscPass<true, false, false>,  oscPass<true, false, true>,
+                              oscPass<true, true, false>,   oscPass<true, true, true>};
+constexpr FilterFn kFilterFns[2][4] = {
+    {filterPass<false, kStore>, filterPass<false, kAdd>, filterPass<false, kAddOut>, filterPass<false, kOutOnly>},
+    {filterPass<true, kStore>, filterPass<true, kAdd>, filterPass<true, kAddOut>, filterPass<true, kOutOnly>}};
 // A silent layer: its phase runs on.
 void skipLayer(LayerV& V, LayerRamp& q) {
     V.ph += float(kChunk) * q.dt.v + 0.5f * float(kChunk * (kChunk - 1)) * q.dt.d;
@@ -303,8 +526,10 @@ public:
             Layer& Y = S.L[j];
             const float to[3] = {kDrive * clampf(P[kSine], 0.0f, 1.0f), kDrive * clampf(P[kNoise], 0.0f, 1.0f),
                                  clampf(P[kLevel], 0.0f, 1.0f)};
-            std::memcpy(Y.lv0, set ? Y.lv1 : to, sizeof(Y.lv0));
-            std::memcpy(Y.lv1, to, sizeof(Y.lv1));
+            for (int k = 0; k < 3; ++k) {   // (element copies: a memcpy call per array cost more than the copy)
+                Y.lv0[k] = set ? Y.lv1[k] : to[k];
+                Y.lv1[k] = to[k];
+            }
             Y.on = Y.lv0[2] > 0.0f || Y.lv1[2] > 0.0f;
             Y.hpOn = Y.hpHz > kHpOffHz;   // (Brilliance moves a 20 Hz high-pass inaudibly)
             const float hk = damping(Y.hpRes + S.resAdd), lk = damping(Y.lpRes + S.resAdd);
@@ -429,11 +654,11 @@ public:
             LayerRamp& r = q[j];
             const float fe0 = W.fenv, ae0 = W.aenv;
             W.fenv = stepIlAl(W.fStage, W.fenv, Y.fc, Y.il, Y.al * velBril);
-            W.aenv = step(W.aStage, W.aenv, Y.vc);
+            W.aenv = stepVca(W.aStage, W.aenv, Y.vc);
             const bool done = W.aStage == kIdle || (W.aStage == kDec && W.aenv == 0.0f && Y.vc.sustain == 0.0f);
             if (!done && Y.on) alive = true;   // a layer at Level 0 does not hold the voice
             if (Y.on && W.aenv > peak) peak = W.aenv;
-            r.dt = lin(incOf(pm0, Y.semi, 0.0f, kMaxDt), incOf(pm1, Y.semi, 0.0f, kMaxDt));
+            r.dt = lin(incOfV(pm0, Y.semi, kMaxDt), incOfV(pm1, Y.semi, kMaxDt));
             if (!Y.on || done) continue;
             run[j] = true;
             auto duty = [&Y](float tri) { return 0.5f - 0.45f * clampf(Y.pw + Y.pwm * 0.5f * (1.0f + tri), 0.0f, 1.0f); };
@@ -443,10 +668,10 @@ public:
             r.sine = lin(Y.lv0[0], Y.lv1[0]);
             r.noise = lin(Y.lv0[1], Y.lv1[1]);
             // Cutoffs: Brilliance (LPF x 2^(2 b), HPF x 2^b), the contour, the common offset.
-            const float lg1 = svfG(Y.lpHz, 2.0f * S.bril + kEnvOct * W.fenv + co1);
-            const float hg1 = svfG(Y.hpHz, S.bril + co1 - kKeyOct * (key1 - 60.0f));
-            const float lg0 = V.set ? W.lpG : svfG(Y.lpHz, 2.0f * S.bril + kEnvOct * fe0 + co0);
-            const float hg0 = V.set ? W.hpG : svfG(Y.hpHz, S.bril + co0 - kKeyOct * (key0 - 60.0f));
+            const float lg1 = svfGV(Y.lpHz, 2.0f * S.bril + kEnvOct * W.fenv + co1);
+            const float hg1 = svfGV(Y.hpHz, S.bril + co1 - kKeyOct * (key1 - 60.0f));
+            const float lg0 = V.set ? W.lpG : svfGV(Y.lpHz, 2.0f * S.bril + kEnvOct * fe0 + co0);
+            const float hg0 = V.set ? W.hpG : svfGV(Y.hpHz, S.bril + co0 - kKeyOct * (key0 - 60.0f));
             W.lpG = lg1;
             W.hpG = hg1;
             r.lg = lin(lg0, lg1);
@@ -469,25 +694,41 @@ public:
         const float rm0 = V.rmEnv;
         V.rmEnv *= S.rmDecC;
         if (V.rmEnv < 1.0e-4f) V.rmEnv = 0.0f;
-        const float ri0 = clampf(S.rmHz * fastExp2(S.rmSweep * rm0) * kInvFs, 0.0f, 0.45f);
-        const float ri1 = clampf(S.rmHz * fastExp2(S.rmSweep * V.rmEnv) * kInvFs, 0.0f, 0.45f);
+        const float ri0 = clampf(S.rmHz * exp2v(S.rmSweep * rm0) * kInvFs, 0.0f, 0.45f);
+        const float ri1 = clampf(S.rmHz * exp2v(S.rmSweep * V.rmEnv) * kInvFs, 0.0f, 0.45f);
         const Lin rmInc = lin(ri0, ri1), rmDepth = lin(S.rmDepth[0], S.rmDepth[1]);
-        float x[kChunk], o[kChunk];   // the voice's sum, a layer's oscillators
+        // The passes of each running layer (wave set, high-pass, where the chunk goes), picked once per block.
+        OscFn osc[2] = {nullptr, nullptr};
+        FilterFn flt[2] = {nullptr, nullptr};
+        FusedFn fus[2] = {nullptr, nullptr};   // the common layer: both passes in one loop
+        const int nRun = int(run[0]) + int(run[1]);
+        for (int j = 0, k = 0; j < 2; ++j) {
+            if (!run[j]) continue;
+            const Layer& Y = S.L[j];
+            const bool sine = Y.lv0[0] > 0.0f || Y.lv1[0] > 0.0f, noise = Y.lv0[1] > 0.0f || Y.lv1[1] > 0.0f;
+            const bool pulse = q[j].gp != 0.0f;
+            const int out = S.ringOn ? (k ? kAdd : kStore) : (nRun == 1 ? kOutOnly : (k ? kAddOut : kStore));
+            if (!sine && !noise && !Y.hpOn) fus[j] = kFusedFns[pulse ? 1 : 0][out];
+            osc[j] = kOscFns[(pulse ? 4 : 0) + (sine ? 2 : 0) + (noise ? 1 : 0)];
+            flt[j] = kFilterFns[Y.hpOn ? 1 : 0][out];
+            ++k;
+        }
+        float x[kChunk], o[kChunk];   // the voice's sum (two layers or the ring), a layer's oscillators
         for (uint32_t c = 0; c < kBlock; c += kChunk) {
-            std::memset(x, 0, sizeof(x));
             for (int j = 0; j < 2; ++j) {
                 LayerV& W = V.L[j];
-                if (run[j]) {
-                    const bool sine = S.L[j].lv0[0] > 0.0f || S.L[j].lv1[0] > 0.0f;
-                    const bool noise = S.L[j].lv0[1] > 0.0f || S.L[j].lv1[1] > 0.0f;
-                    oscPass(o, W, V.noise, q[j], sine, noise);
-                    if (S.L[j].hpOn) filterPass<true>(o, x, W, q[j]);
-                    else filterPass<false>(o, x, W, q[j]);
+                if (fus[j]) fus[j](x, Lo + c, Ro + c, W, q[j]);
+                else if (run[j]) {
+                    osc[j](o, W, V.noise, q[j]);
+                    flt[j](o, x, Lo + c, Ro + c, W, q[j]);
                 }
                 else skipLayer(W, q[j]);
             }
-            Lin ri = {rmInc.v + float(c) * rmInc.d, rmInc.d}, rd = {rmDepth.v + float(c) * rmDepth.d, rmDepth.d};
-            outPass(x, Lo + c, Ro + c, V.rmPh, ri, rd, S.ringOn);
+            if (S.ringOn) {
+                if (nRun == 0) std::memset(x, 0, sizeof(x));
+                Lin ri = {rmInc.v + float(c) * rmInc.d, rmInc.d}, rd = {rmDepth.v + float(c) * rmDepth.d, rmDepth.d};
+                outPass(x, Lo + c, Ro + c, V.rmPh, ri, rd, true);
+            }
         }
         for (LayerV& W : V.L) {
             W.hp.s1 = flush(W.hp.s1);
