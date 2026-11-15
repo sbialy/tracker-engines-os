@@ -43,7 +43,9 @@ this file and the licence texts in `licenses/` (the build copies the ones a modu
 ## 5. Polyend Chiptune voice (CHIP)
 
 * **Location**: `sdk/files/core/synth/engines/ChiptuneSynthVoice.{cpp,h}` (Polyend's open Chiptune voice, vendored unchanged from tracker-ff
-  `core/synth/engines/` apart from the `FEATURE_SYNTH_OPEN` hooks tracker-ff added), the PolySynth headers it includes (`sdk/files/synth/include/PolySynth/`,
+  `core/synth/engines/` apart from the `FEATURE_SYNTH_OPEN` hooks tracker-ff added). The plugin builds the voice from
+  `src/synth-open/chip_voice.cpp`, a copy of that file whose render loop is restructured for speed (CHIP 1.1.1, same output bit for bit,
+  the vendored copy stays as the reference), the PolySynth headers it includes (`sdk/files/synth/include/PolySynth/`,
   `core/config/config.h`, `util/include/PolyUtil/misc.h`) and the third party headers those pull in (`sdk/files/util/3rdparty/`: `fmt`, `boost`
   `container` and its dependencies, `tiny`, `constexpr-string`, `enum_util.h`), all listed in `sdk/polysynth.txt`. `src/synth-open/engine_chip.cpp`
   hosts the voice behind the shim's engine interface (parameter table, sections and macros follow the voice's `createMetadata`, voice objects
