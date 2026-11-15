@@ -21,6 +21,7 @@
 #include "PolySynth/config.h"
 #include "PolySynth/sdk/InstrumentVoice.h"
 #include "engines/ChiptuneSynthVoice.h"
+#include "chip_share.h"
 
 #include <algorithm>
 #include <cmath>
@@ -29,6 +30,11 @@
 
 namespace polysynth::open
 {
+// chip_voice.cpp: render one block of the voice and mix it into L and R with the gain ramp, returns the peak of the voice
+float chipVoiceRenderMix(InstrumentVoice& voice, float* L, float* R, float g0, float gInc, ChipFilterShare* share);
+// chip_voice.cpp: the voice object chipVoiceConstruct built in this storage
+InstrumentVoice* chipVoiceAt(void* storage);
+
 namespace
 {
 using ot::audio::SynthNote;
@@ -134,13 +140,14 @@ class ChipEngine final : public ot::audio::ISynthEngine
         {
             return;
         }
+        InstrumentVoice& voice = voiceOf(e);
         if (!n.reused)
         {
-            chipVoiceReset(*e->voice);
+            chipVoiceReset(voice);
         }
-        pushParams(*e->voice, p);
-        chipVoiceSetBend(*e->voice, v.bend);
-        e->voice->onMidiEvent(ctx, noteEvent(MidiEvent::Type::kNoteOn, n.note));
+        pushParams(voice, p);
+        chipVoiceSetBend(voice, v.bend);
+        voice.onMidiEvent(ctx, noteEvent(MidiEvent::Type::kNoteOn, n.note));
     }
 
     void noteOff(SynthVoice& v, const SynthParams&) override
@@ -148,8 +155,9 @@ class ChipEngine final : public ot::audio::ISynthEngine
         if (Entry* e = entryFor(&v, false))
         {
             // The shim owns polyphony: forget held notes so the voice releases instead of retriggering one
-            e->voice->clearPreviousNotes();
-            e->voice->onMidiEvent(ctx, noteEvent(MidiEvent::Type::kNoteOff, v.note));
+            InstrumentVoice& voice = voiceOf(e);
+            voice.clearPreviousNotes();
+            voice.onMidiEvent(ctx, noteEvent(MidiEvent::Type::kNoteOff, v.note));
         }
     }
 
@@ -160,22 +168,14 @@ class ChipEngine final : public ot::audio::ISynthEngine
         {
             return false;
         }
-        pushParams(*e->voice, p);
-        chipVoiceSetBend(*e->voice, v.bend);
-        AudioBufferStereoRef out{ AudioBufferRef(st.bufL), AudioBufferRef(st.bufL) };
-        e->voice->renderVoiceAudio(ctx, std::nullopt, out, {});
-        float peak = 0.0f;
-        float g = g0;
-        for (int i = 0; i < kAudioBufferSize; i++)
-        {
-            const float s = st.bufL[i];
-            peak = std::max(peak, std::fabs(s));
-            L[i] += s * g;
-            R[i] += s * g;
-            g += gInc;
-        }
+        InstrumentVoice& voice = voiceOf(e);
+        pushParams(voice, p);
+        chipVoiceSetBend(voice, v.bend);
+        // the voice renders and mixes in one pass (peak, L and R += sample x gain ramp, the loop this function had), the filter
+        // share lets the voices of a chord that move on the same envelope path read one voice's filter coefficients
+        const float peak = chipVoiceRenderMix(voice, L, R, g0, gInc, &st.share);
         v.level = std::min(peak, 1.0f);
-        return e->voice->isActive();
+        return voice.isActive();
     }
 
 #ifdef OPEN_HOST_TEST
@@ -192,38 +192,41 @@ class ChipEngine final : public ot::audio::ISynthEngine
     struct Entry
     {
         const SynthVoice* key;
-        uint32_t stamp;
-        InstrumentVoice* voice; // in State::mem
+        uint32_t stamp;   // the voice object is the one of the same index (voiceOf), no pointer: the 64 B pay for the filter share's key
     };
     // Everything that changes while the engine plays, zero at attach (the host zeroes the bss): no constructor, no initializer
     struct State
     {
         Entry pool[kMaxVoiceObjects];
         uint32_t stampCounter;
+        bool built;       // the objects of mem are constructed
+        bool workBuilt;   // the objects of work are constructed
         alignas(8) unsigned char mem[kBssObjects][kChipVoiceBytes];
 #ifdef CHIP_WORK_POOL
         unsigned char* work;   // the host's block (setWork), kWorkBytes
 #endif
-        float bufL[kAudioBufferSize];
+        ChipFilterShare share;   // 548 B, in the place of the old mono render buffer (the voice now mixes into L and R itself)
     };
 
     void createPool()
     {
-        if (!st.pool[0].voice)
+        if (!st.built)
         {
             for (int i = 0; i < kBssObjects; i++)
             {
-                st.pool[i].voice = chipVoiceConstruct(st.mem[i]);
+                chipVoiceConstruct(st.mem[i]);
             }
+            st.built = true;
         }
 #ifdef CHIP_WORK_POOL
         // the objects of the work memory (given before the first audio call, after init): built once, the host zeroes the block at every attach
-        if (st.work && !st.pool[kBssObjects].voice)
+        if (st.work && !st.workBuilt)
         {
             for (int i = 0; i < kWorkObjects; i++)
             {
-                st.pool[kBssObjects + i].voice = chipVoiceConstruct(st.work + i * kChipVoiceBytes);
+                chipVoiceConstruct(st.work + i * kChipVoiceBytes);
             }
+            st.workBuilt = true;
         }
 #endif
     }
@@ -236,7 +239,8 @@ class ChipEngine final : public ot::audio::ISynthEngine
         {
             st.pool[i] = Entry{};
         }
-        if (st.work && st.pool[0].voice)
+        st.workBuilt = false;
+        if (st.work && st.built)
         {
             createPool();
         }
@@ -252,7 +256,7 @@ class ChipEngine final : public ot::audio::ISynthEngine
         Entry* oldest = nullptr;
         for (auto& e : st.pool)
         {
-            if (!e.voice)
+            if (!hasObject(&e))
             {
                 continue;   // an object of the work memory the host did not give
             }
@@ -264,7 +268,7 @@ class ChipEngine final : public ot::audio::ISynthEngine
             {
                 freeEntry = freeEntry ? freeEntry : &e;
             }
-            else if (!idle && e.voice && !e.voice->isActive())
+            else if (!idle && !voiceOf(&e).isActive())
             {
                 idle = &e;
             }
@@ -278,13 +282,34 @@ class ChipEngine final : public ot::audio::ISynthEngine
             return nullptr;
         }
         Entry* pick = freeEntry ? freeEntry : (idle ? idle : oldest);
-        if (!pick || !pick->voice)
+        if (!pick || !hasObject(pick))
         {
             return nullptr;
         }
         pick->key = key;
         pick->stamp = ++st.stampCounter;
         return pick;
+    }
+    // the voice object of an entry: index i of the pool is mem[i], the ones past the bss are the work memory's
+    static bool hasObject(const Entry* e)
+    {
+        const int i = static_cast<int>(e - st.pool);
+#ifdef CHIP_WORK_POOL
+        return i < kBssObjects ? st.built : st.workBuilt;
+#else
+        return st.built && i < kBssObjects;
+#endif
+    }
+    static InstrumentVoice& voiceOf(const Entry* e)
+    {
+        const int i = static_cast<int>(e - st.pool);
+#ifdef CHIP_WORK_POOL
+        if (i >= kBssObjects)
+        {
+            return *chipVoiceAt(st.work + (i - kBssObjects) * kChipVoiceBytes);
+        }
+#endif
+        return *chipVoiceAt(st.mem[i]);
     }
     static void pushParams(InstrumentVoice& voice, const SynthParams& p)
     {

@@ -1,4 +1,5 @@
 # the engine sources of this repository, under src/ at their tracker-ff paths, root relative, sorted
+synth-open/chip_share.h
 synth-open/chip_voice.cpp
 synth-open/engine_arc.cpp
 synth-open/engine_atype.cpp
