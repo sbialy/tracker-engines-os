@@ -85,7 +85,7 @@ inline float lfoTri(float ph) { return ph < 0.25f ? 4.0f * ph : (ph < 0.75f ? 2.
 
 enum Stage : uint8_t { kIdle = 0, kAtt, kDec, kRel };
 
-// PARA: the chord table of the stock MIDI Chord FX (core/source/mtChordDefs.h chordDef, 68 masks): bit n = n semitones above the
+// PARA: the chord table of the stock MIDI Chord FX (core/source/mtChordDefs.h chordDef, 77 masks): bit n = n semitones above the
 // played note, bit 0 (the note itself) always set. 1 single note, 22 triads, 45 four-note chords, so at most 3 extra DCOs.
 constexpr uint16_t kChordMask[kChordCount] = {
     0x0001, 0x0085, 0x0105, 0x0049, 0x0089, 0x0091, 0x0111, 0x00A1, 0x0421, 0x1021, 0x00C1, 0x1081,
@@ -94,6 +94,8 @@ constexpr uint16_t kChordMask[kChordCount] = {
     0x0129, 0x0225, 0x0149, 0x0229, 0x0245, 0x0209, 0x0241, 0x0441, 0x0051, 0x0043, 0x0821, 0x0251,
     0x0125, 0x0131, 0x0113, 0x0151, 0x0115, 0x0445, 0x0191, 0x0119, 0x0223, 0x00A5, 0x0429, 0x0521,
     0x00A9, 0x0215, 0x0621, 0x00B1, 0x010B, 0x00C5, 0x0431, 0x0143,
+    // 68..76 (2.0.0): madd9, add9, 9, m9, maj9, 6/9, 7#9, 7b9, 7b5, four notes each (the fifth dropped), 7#9 spans 15 semitones
+    0x4089, 0x4091, 0x4411, 0x4409, 0x4811, 0x4211, 0x8411, 0x2411, 0x0451,
 };
 
 struct SlotState {
@@ -296,7 +298,7 @@ JU6_PER_BLOCK void latchChord(VoiceState& V, SlotState& S, const SynthParams& p,
     if (p.count < kParamCount || enumOf(p.end[kChordMode], 1) != kChordPara) return;
     const unsigned mask = kChordMask[enumOf(p.end[kChord], kChordCount - 1)];
     int off[4], cnt = 0;
-    for (int b = 1; b < 15 && cnt < 3; ++b)
+    for (int b = 1; b < 16 && cnt < 3; ++b)
         if (mask & (1u << b)) off[++cnt] = b;
     if (!cnt) return;
     off[0] = 0;

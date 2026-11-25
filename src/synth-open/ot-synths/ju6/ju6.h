@@ -46,7 +46,7 @@ enum Chorus : int { kChorusOff = 0, kChorusI, kChorusII };
 // HPF / VCF / VCA / ADSR. Poly (default) is the engine as it always was, the Chord and Voicing values are ignored.
 enum ChordMode : int { kChordPoly = 0, kChordPara };
 enum Voicing : int { kVoicClose = 0, kVoicDrop2, kVoicOpen, kVoicSpread };
-constexpr int kChordCount = 68;   // the stock MIDI Chord FX table (core/source/mtChordDefs.h), 0 = the played note only
+constexpr int kChordCount = 77;   // the stock MIDI Chord FX table (core/source/mtChordDefs.h, plug_chord.h), 0 = the played note only
 
 ISynthEngine* engine();
 // Tests: the chorus tap delay of side c (0 = L, 1 = R) at the end of the

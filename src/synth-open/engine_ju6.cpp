@@ -6,7 +6,7 @@
 // The built-in chorus runs once per slot on the voice sum (ISynthEngine::slotPost), see EngineDef::slotFx.
 //
 // tracker-ff addition: paraphony. Chord Mode / Chord / Voicing / Strum are appended after Chorus (indices 23 to 26), so every older patch
-// keeps its values and plays polyphonic (Chord Mode Poly = the engine as it was). Chord is the stock MIDI Chord FX table (68
+// keeps its values and plays polyphonic (Chord Mode Poly = the engine as it was). Chord is the stock MIDI Chord FX table (77
 // entries, 0 = the played note), named like the FX value list. The "Chord" section is last.
 #include "open_engine.h"
 
@@ -30,7 +30,7 @@ const char* const kChordName[ot::audio::ju6::kChordCount] = {
     "---", "27",  "28",  "36",  "37",  "47",  "48",  "57",  "5A",  "5C",  "67",  "7C",  "7E",  "279", "27A", "27B", "369", "36A", "378",
     "379", "37A", "37B", "479", "47A", "47B", "489", "48A", "48B", "57A", "57B", "38",  "59",  "49",  "58",  "459", "158", "358", "259",
     "368", "359", "269", "39",  "69",  "6A",  "46",  "16",  "5B",  "469", "258", "458", "148", "468", "248", "26A", "478", "348", "159",
-    "257", "35A", "58A", "357", "249", "59A", "457", "138", "267", "45A", "168",
+    "257", "35A", "58A", "357", "249", "59A", "457", "138", "267", "45A", "168", "37E", "47E", "4AE", "3AE", "4BE", "49E", "4AF", "4AD", "46A",
 };
 
 using F = Fmt;

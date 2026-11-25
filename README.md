@@ -20,7 +20,7 @@ the engine numbers it keeps in `engines/engines.json`.
 
 ## JU6 paraphony (1.1.0)
 
-JU6 has four parameters appended after Chorus: Chord Mode (Poly, Para), Chord (the 68 entries of the stock MIDI Chord FX, interval digits),
+JU6 has four parameters appended after Chorus: Chord Mode (Poly, Para), Chord (the 77 entries of the stock MIDI Chord FX of firmware 2.0.0, interval digits, 1.1.1 added the nine entries 68 to 76: madd9, add9, 9, m9, maj9, 6/9, 7#9, 7b9, 7b5),
 Voicing (Close, Drop 2, Open, Spread) and Strum. Poly is the engine as it was, the other three are ignored, older patches play unchanged and bit identical.
 Para sounds the Chord from one note as up to four DCOs through the one HPF, VCF, ADSR, VCA and LFO, takes one pool voice and one note-on,
 and costs about two thirds of four polyphonic voices. The chord is read at every note-on, so a host that writes the step's chord into the Chord

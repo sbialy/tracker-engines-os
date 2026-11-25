@@ -42,8 +42,8 @@ def chord_notes(root, idx):
         body = src[src.index("kChordMask[kChordCount] = {"):]
         body = body[:body.index("};")]
         CHORD_MASK = [int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]{4}", body)]
-        assert len(CHORD_MASK) == 68
-    return [root + b for b in range(15) if CHORD_MASK[idx] >> b & 1]
+        assert len(CHORD_MASK) == 77
+    return [root + b for b in range(16) if CHORD_MASK[idx] >> b & 1]
 
 
 def spectrum_level(sig, hz, fs=44117.647):
@@ -139,14 +139,14 @@ def main():
 
     # 4. all chords, all voicings
     worst, bad = 0.0, 0
-    for ci in range(68):
+    for ci in range(77):
         for vo in range(4):
             f, _, _ = new.run(24, 1, [60], 16, patch + [(kmode, 1.0), (kchord, float(ci)), (kvoic, float(vo))])
             if not np.isfinite(f).all():
                 bad += 1
             worst = max(worst, float(np.abs(f).max()))
     ok4 = bad == 0 and worst < 4.0
-    print("4. 68 chords x 4 voicings: non finite %d, peak %.3f: %s" % (bad, worst, "PASS" if ok4 else "FAIL"))
+    print("4. 77 chords x 4 voicings: non finite %d, peak %.3f: %s" % (bad, worst, "PASS" if ok4 else "FAIL"))
     fails += not ok4
     # 5. Strum 0 is the engine as it was
     if a.base:
