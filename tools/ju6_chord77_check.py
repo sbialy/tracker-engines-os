@@ -39,6 +39,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("old")
     ap.add_argument("new")
+    ap.add_argument("--part", default="all", help="all, new (table, names, 2a, fundamentals of 68..76, Poly ignores them) or id:K/N (old 68 chords k %% N == K bit identical to OLD)")
     ap.add_argument("--fw", default=os.path.expanduser("~/prj/poly-wt/rel200-int"))
     a = ap.parse_args()
     bad = 0
@@ -48,12 +49,14 @@ def main():
         bad += 1
         print("FAIL", m)
 
-    harness = os.path.join("/tmp", "ju6_chord77_harness.plg")
+    harness = os.path.join("/tmp", "ju6_chord77_harness_%d.plg" % os.getpid())
     R.build_harness(os.environ["TOOLCHAIN"], harness)
     old, new = R.Run(a.old, harness, BASE), R.Run(a.new, harness, BASE)
     assert old.nparams == new.nparams == 27, (old.nparams, new.nparams)
     kmode, kchord, kvoic = new.pidx("Chord Mode"), new.pidx("Chord"), new.pidx("Voicing")
 
+    part = a.part
+    kk, nn = (int(x) for x in part[3:].split("/")) if part.startswith("id:") else (0, 1)
     # 1. the table
     src = open(os.path.join(ROOT, "src", "synth-open", "ot-synths", "ju6", "ju6.cpp")).read()
     body = src[src.index("kChordMask[kChordCount] = {"):]
@@ -82,16 +85,17 @@ def main():
     # 2. every chord, voicing: finite and bounded. 68..76: the fundamentals
     root, blocks = 48, 64
     worst, nonfin = 0.0, 0
-    for ci in range(77):
+    for ci in (range(77) if part in ("all", "new") else ()):
         for vo in range(4):
             f, _, _ = new.run(24, 1, [60], 16, patch + [(kmode, 1.0), (kchord, float(ci)), (kvoic, float(vo))])
             nonfin += not np.isfinite(f).all()
             worst = max(worst, float(np.abs(f).max()))
-    print("2a. 77 chords x 4 voicings: non finite %d, peak %.3f: %s" % (nonfin, worst, "PASS" if not nonfin and worst < 4.0 else "FAIL"))
-    if nonfin or worst >= 4.0:
-        fail("non finite or loud")
+    if part in ("all", "new"):
+        print("2a. 77 chords x 4 voicings: non finite %d, peak %.3f: %s" % (nonfin, worst, "PASS" if not nonfin and worst < 4.0 else "FAIL"))
+        if nonfin or worst >= 4.0:
+            fail("non finite or loud")
     single = {}
-    for ci in range(68, 77):
+    for ci in (range(68, 77) if part in ("all", "new") else ()):
         notes = [root + b for b in range(16) if mine[ci] >> b & 1]
         para, _, _ = new.run(blocks, 1, [root], blocks, patch + [(kmode, 1.0), (kchord, float(ci))])
         sig = para[8:, 0, :].reshape(-1)
@@ -113,20 +117,21 @@ def main():
         return r.run(48, 1, [60], 32, patch + [(kmode, mode), (kchord, float(ci)), (kvoic, float(vo))])[0].tobytes()
 
     n3 = d3 = 0
-    for ci in range(68):
+    for ci in (range(kk, 68, nn) if part != "new" else ()):
         for vo in range(4):
             for mode in (1.0, 0.0):
                 n3 += 1
                 if rnd(old, ci, vo, mode) != rnd(new, ci, vo, mode):
                     d3 += 1
                     fail("render differs from the pinned build: Chord %d Voicing %d Mode %g" % (ci, vo, mode))
-    print("3. old 68 chords x 4 voicings x Para/Poly: %d renders, %d differ from the pinned v1.4.0 build" % (n3, d3))
-    p0 = rnd(new, 0, 2, 0.0)
-    pn = sum(rnd(new, ci, 2, 0.0) != p0 for ci in range(68, 77))
-    if pn:
-        fail("Poly renders of Chord 68..76 differ from Chord 0 (%d)" % pn)
-    else:
-        print("ok   Poly ignores Chord 68..76 (bit identical to Chord 0)")
+    print("3. [%s] old 68 chords x 4 voicings x Para/Poly: %d renders, %d differ from the pinned v1.4.0 build" % (part, n3, d3))
+    if part in ("all", "new"):
+        p0 = rnd(new, 0, 2, 0.0)
+        pn = sum(rnd(new, ci, 2, 0.0) != p0 for ci in range(68, 77))
+        if pn:
+            fail("Poly renders of Chord 68..76 differ from Chord 0 (%d)" % pn)
+        else:
+            print("ok   Poly ignores Chord 68..76 (bit identical to Chord 0)")
     print("RESULT:", "PASS" if not bad else "FAIL (%d)" % bad)
     return 1 if bad else 0
 
